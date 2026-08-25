@@ -1,0 +1,318 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
+from rich.console import Console
+
+from mika.cli import slash_commands
+from mika.cli.errors import NoActiveRouterError
+from mika.cli.session import ChatSession, HistoryEntry
+
+
+@pytest.fixture
+def console():
+    return Console(file=Mock(), force_terminal=False)
+
+
+@pytest.fixture
+def mock_session():
+    session = Mock(spec=ChatSession)
+    session.router_alias = None
+    session.provider_name = None
+    session.model_name = None
+    session.history = []
+    session.last_backup = None
+    session.config = Mock(routers={})
+    session.config_path = Path("/tmp/mock_config.toml")
+    return session
+
+
+def test_is_slash_command():
+    assert slash_commands.is_slash_command("/help")
+    assert slash_commands.is_slash_command("  /router list")
+    assert not slash_commands.is_slash_command("normal message")
+    assert not slash_commands.is_slash_command("")
+
+
+@pytest.mark.asyncio
+async def test_dispatch_help(console, mock_session):
+    await slash_commands.dispatch("/help", mock_session, console)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_unknown_command(console, mock_session):
+    await slash_commands.dispatch("/unknown", mock_session, console)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_exit_raises(console, mock_session):
+    with pytest.raises(slash_commands.ExitRepl):
+        await slash_commands.dispatch("/exit", mock_session, console)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_quit_is_unknown(console, mock_session):
+    await slash_commands.dispatch("/quit", mock_session, console)
+
+
+@pytest.mark.asyncio
+async def test_cmd_clear(console, mock_session):
+    mock_session.history = [HistoryEntry("user", "test")]
+    await slash_commands._cmd_clear("", mock_session, console)
+    assert len(mock_session.history) == 0
+
+
+@pytest.mark.asyncio
+async def test_cmd_history_empty(console, mock_session):
+    await slash_commands._cmd_history("", mock_session, console)
+
+
+@pytest.mark.asyncio
+async def test_cmd_history_with_entries(console, mock_session):
+    mock_session.history = [
+        HistoryEntry("user", "hello"),
+        HistoryEntry("assistant", "intent=inspect_router"),
+    ]
+    await slash_commands._cmd_history("", mock_session, console)
+
+
+@pytest.mark.asyncio
+async def test_cmd_model_no_arg_opens_selection_menu(console, mock_session):
+    mock_session.config.models = []
+    mock_session.activate_provider = Mock()
+    mock_session.persist_active_selection = Mock()
+    with patch(
+        "mika.cli.slash_commands.wizard.select_model",
+        new_callable=AsyncMock,
+        return_value=("gemini", "gemini-1.5-pro"),
+    ) as m:
+        await slash_commands._cmd_model("", mock_session, console)
+    m.assert_called_once_with(mock_session.config)
+    mock_session.activate_provider.assert_called_once_with("gemini", "gemini-1.5-pro")
+    mock_session.persist_active_selection.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_cmd_model_no_arg_esc_cancels_silently(console, mock_session):
+    mock_session.activate_provider = Mock()
+    with patch("mika.cli.slash_commands.wizard.select_model", new_callable=AsyncMock, return_value=None):
+        await slash_commands._cmd_model("", mock_session, console)
+    mock_session.activate_provider.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cmd_model_change(console, mock_session):
+    mock_session.provider_name = "gemini"
+    mock_session.model_name = "gemini-1.5-flash"
+    mock_session.activate_provider = Mock()
+    mock_session.persist_active_selection = Mock()
+    await slash_commands._cmd_model("gemini-2.0-flash", mock_session, console)
+    mock_session.activate_provider.assert_called_once_with("gemini", "gemini-2.0-flash")
+    mock_session.persist_active_selection.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_cmd_router_list_empty(console, mock_session):
+    mock_session.config.routers = {}
+    await slash_commands._cmd_router("list", mock_session, console)
+
+
+@pytest.mark.asyncio
+async def test_cmd_router_status_no_active(console, mock_session):
+    await slash_commands._cmd_router("status", mock_session, console)
+
+
+@pytest.mark.asyncio
+async def test_cmd_router_select(console, mock_session):
+    mock_session.connect_router = Mock()
+    mock_session.persist_active_selection = Mock()
+    await slash_commands._cmd_router("select lab", mock_session, console)
+    mock_session.connect_router.assert_called_once_with("lab")
+    mock_session.persist_active_selection.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch("mika.cli.wizard.run_router_wizard", new_callable=AsyncMock)
+@patch("mika.cli.config.save_config")
+async def test_cmd_router_add(mock_save, mock_wizard, console, mock_session):
+    from mika.cli.config import RouterProfileConfig
+    from unittest.mock import AsyncMock
+
+    mock_wizard.return_value = (
+        "lab",
+        RouterProfileConfig(host="192.168.88.1", username="admin", backend="rest"),
+    )
+    mock_session.connect_router = Mock()
+    mock_session.persist_active_selection = Mock()
+    mock_session.config_path = Mock()
+
+    q_mock = AsyncMock()
+    q_mock.ask_async = AsyncMock(return_value="manual")
+    with patch("questionary.select", return_value=q_mock):
+        await slash_commands._cmd_router("add", mock_session, console)
+
+    assert "lab" in mock_session.config.routers
+    mock_session.connect_router.assert_called_once_with("lab")
+
+
+@pytest.mark.asyncio
+@patch("mika.cli.wizard.scan_and_select_router", new_callable=AsyncMock)
+@patch("mika.cli.wizard.run_router_wizard", new_callable=AsyncMock)
+@patch("mika.cli.config.save_config")
+async def test_cmd_router_add_with_scan(mock_save, mock_wizard, mock_scan, console, mock_session):
+    from mika.cli.config import RouterProfileConfig
+    from mika.router.mndp import MndpDevice
+    from unittest.mock import AsyncMock
+
+    device = MndpDevice(mac_address="00:11:22:33:44:55", identity="office", ip_address="192.168.1.1")
+    mock_scan.return_value = device
+    mock_wizard.return_value = (
+        "office",
+        RouterProfileConfig(host="192.168.1.1", username="admin", backend="rest"),
+    )
+    mock_session.connect_router = Mock()
+    mock_session.persist_active_selection = Mock()
+    mock_session.config_path = Mock()
+
+    q_mock = AsyncMock()
+    q_mock.ask_async = AsyncMock(return_value="scan")
+    with patch("questionary.select", return_value=q_mock):
+        await slash_commands._cmd_router("add", mock_session, console)
+
+    mock_scan.assert_awaited_once()
+    mock_wizard.assert_awaited_once_with(
+        existing_aliases=[],
+        discovered=device,
+    )
+    assert "office" in mock_session.config.routers
+
+
+@pytest.mark.asyncio
+async def test_cmd_inspect_without_target_opens_selection_menu(console, mock_session):
+    mock_session.require_router = Mock(return_value=Mock())
+    with patch("mika.cli.slash_commands.wizard.select_inspect_target", new_callable=AsyncMock, return_value=None) as m:
+        await slash_commands._cmd_inspect("", mock_session, console)
+    m.assert_called_once()
+    mock_session.require_router.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("mika.cli.slash_commands.discover", new_callable=AsyncMock)
+@patch("mika.cli.render.render_inspect")
+async def test_cmd_inspect_with_target(mock_render, mock_discover, console, mock_session):
+    mock_ctx = Mock()
+    mock_discover.return_value = mock_ctx
+    mock_session.require_router = Mock(return_value=Mock())
+    await slash_commands._cmd_inspect("router", mock_session, console)
+    mock_discover.assert_called_once()
+    mock_render.assert_called_once_with(console, "router", mock_ctx)
+
+
+@pytest.mark.asyncio
+async def test_cmd_inspect_no_router_raises(console, mock_session):
+    mock_session.require_router = Mock(side_effect=NoActiveRouterError("no router"))
+    with pytest.raises(NoActiveRouterError):
+        await slash_commands._cmd_inspect("router", mock_session, console)
+
+
+@pytest.mark.asyncio
+async def test_cmd_status(console, mock_session):
+    await slash_commands._cmd_status("", mock_session, console)
+
+
+@pytest.mark.asyncio
+async def test_cmd_backup_no_backup(console, mock_session):
+    mock_session.last_backup = None
+    await slash_commands._cmd_backup("", mock_session, console)
+
+
+@pytest.mark.asyncio
+async def test_cmd_backup_with_backup(console, mock_session):
+    from datetime import datetime, timezone
+
+    mock_backup = Mock()
+    mock_backup.plan_id = "test-plan"
+    mock_backup.created_at = datetime.now(timezone.utc)
+    mock_session.last_backup = mock_backup
+    await slash_commands._cmd_backup("", mock_session, console)
+
+
+@pytest.mark.asyncio
+@patch("mika.cli.config.save_config")
+async def test_cmd_router_remove_with_arg(mock_save, console, mock_session):
+    from mika.cli.config import RouterProfileConfig
+
+    mock_session.config.routers = {
+        "lab": RouterProfileConfig(host="192.168.88.1", username="admin", backend="rest"),
+        "office": RouterProfileConfig(host="192.168.1.1", username="admin", backend="rest"),
+    }
+    mock_session.router_alias = "lab"
+    mock_session.router_client = Mock()
+
+    await slash_commands._cmd_router("remove lab", mock_session, console)
+
+    assert "lab" not in mock_session.config.routers
+    assert "office" in mock_session.config.routers
+    assert mock_session.router_alias is None
+    assert mock_session.router_client is None
+    mock_save.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_cmd_router_remove_not_found(console, mock_session):
+    from mika.cli.config import RouterProfileConfig
+
+    mock_session.config.routers = {
+        "office": RouterProfileConfig(host="192.168.1.1", username="admin", backend="rest"),
+    }
+    await slash_commands._cmd_router("remove non_existent", mock_session, console)
+    assert "office" in mock_session.config.routers
+
+
+@pytest.mark.asyncio
+@patch("mika.cli.config.save_config")
+async def test_cmd_router_remove_interactive(mock_save, console, mock_session):
+    from mika.cli.config import RouterProfileConfig
+    from unittest.mock import AsyncMock
+
+    mock_session.config.routers = {
+        "lab": RouterProfileConfig(host="192.168.88.1", username="admin", backend="rest"),
+    }
+    mock_session.router_alias = "lab"
+
+    q_mock = AsyncMock()
+    q_mock.ask_async = AsyncMock(return_value="lab")
+    with patch("questionary.select", return_value=q_mock):
+        await slash_commands._cmd_router("remove", mock_session, console)
+
+    assert "lab" not in mock_session.config.routers
+    assert mock_session.router_alias is None
+    mock_save.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_cmd_reset(console, mock_session):
+    from mika.cli.config import RouterProfileConfig
+    from unittest.mock import AsyncMock
+    from pathlib import Path
+
+    mock_session.config.routers = {
+        "lab": RouterProfileConfig(host="192.168.88.1", username="admin", backend="rest"),
+    }
+    mock_session.config.models = []
+    mock_session.router_alias = "lab"
+    mock_session.provider_name = "gemini"
+    mock_session.model_name = "gemini-1.5-flash"
+    mock_session.config_path = Path("/tmp/dummy_config.toml")
+
+    q_mock = AsyncMock()
+    q_mock.ask_async = AsyncMock(return_value=True)
+    with patch("questionary.confirm", return_value=q_mock), patch("mika.cli.config.save_config"):
+        await slash_commands._cmd_reset("", mock_session, console)
+
+    assert len(mock_session.config.routers) == 0
+    assert mock_session.router_alias is None
+    assert mock_session.provider_name is None
