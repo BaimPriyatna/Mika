@@ -3,6 +3,7 @@ from __future__ import annotations
 import questionary
 from rich import box
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from mika.cli import config as cli_config
@@ -64,7 +65,7 @@ async def dispatch(line: str, session: ChatSession, console: Console) -> None:
 
     handler = _HANDLERS.get(cmd)
     if handler is None:
-        console.print(f"[yellow]Unknown command: {cmd}. Type /help for available commands.[/yellow]")
+        console.print(f"[yellow]Unknown command: {escape(cmd)}. Type /help for available commands.[/yellow]")
         return
 
     try:
@@ -72,9 +73,9 @@ async def dispatch(line: str, session: ChatSession, console: Console) -> None:
     except ExitRepl:
         raise
     except CliError as exc:
-        console.print(f"[red]{exc}[/red]")
+        console.print(f"[red]{escape(str(exc))}[/red]")
     except Exception as exc:
-        console.print(f"[red]Unexpected error in '{cmd}': {exc or type(exc).__name__}[/red]")
+        console.print(f"[red]Unexpected error in '{escape(cmd)}': {escape(str(exc) or type(exc).__name__)}[/red]")
         console.print("[dim]If this persists, please report it as a bug.[/dim]")
 
 
@@ -109,7 +110,7 @@ async def _cmd_model(arg: str, session: ChatSession, console: Console) -> None:
             return
         session.activate_provider(session.provider_name, arg)
         session.persist_active_selection()
-        console.print(f"[green]Model switched to {arg}.[/green]")
+        console.print(f"[green]Model switched to {escape(arg)}.[/green]")
         return
 
     selected = await wizard.select_model(session.config)
@@ -118,15 +119,15 @@ async def _cmd_model(arg: str, session: ChatSession, console: Console) -> None:
     provider, model = selected
     session.activate_provider(provider, model)
     session.persist_active_selection()
-    console.print(f"[green]Active model: {provider}: {model}[/green]")
+    console.print(f"[green]Active model: {escape(provider)}: {escape(model)}[/green]")
 
 
 async def _cmd_provider(arg: str, session: ChatSession, console: Console) -> None:
     if arg:
         if session.cached_provider_secret(arg) or env_secrets.get_provider_secret(arg):
-            console.print(f"[dim]Provider '{arg}' is ready. Run /model to select active model.[/dim]")
+            console.print(f"[dim]Provider '{escape(arg)}' is ready. Run /model to select active model.[/dim]")
             return
-        console.print(f"[dim]No API key saved for '{arg}', launching wizard...[/dim]")
+        console.print(f"[dim]No API key saved for '{escape(arg)}', launching wizard...[/dim]")
 
     provider_name, models = await wizard.run_provider_wizard()
     for model in models:
@@ -151,7 +152,7 @@ async def _cmd_router(arg: str, session: ChatSession, console: Console) -> None:
         for alias, profile in session.config.routers.items():
             table.add_row(
                 alias,
-                f"{profile.host}:{profile.port}",
+                f"{profile.host}:{profile.effective_port}",
                 profile.backend,
                 "[green]active[/green]" if alias == session.router_alias else "",
             )
@@ -171,7 +172,7 @@ async def _cmd_router(arg: str, session: ChatSession, console: Console) -> None:
             alias = choice
         session.connect_router(alias)
         session.persist_active_selection()
-        console.print(f"[green]Active router: {alias}[/green]")
+        console.print(f"[green]Active router: {escape(alias)}[/green]")
         return
 
     if sub == "add":
@@ -186,7 +187,7 @@ async def _cmd_router(arg: str, session: ChatSession, console: Console) -> None:
         if sub_arg:
             alias = sub_arg
             if alias not in session.config.routers:
-                console.print(f"[yellow]Router '{alias}' not found. Use /router list to view registered routers.[/yellow]")
+                console.print(f"[yellow]Router '{escape(alias)}' not found. Use /router list to view registered routers.[/yellow]")
                 return
         else:
             choices = [
@@ -222,7 +223,7 @@ async def _cmd_router(arg: str, session: ChatSession, console: Console) -> None:
             pass
 
         cli_config.save_config(session.config, session.config_path)
-        console.print(f"[green]Router '{alias}' removed.[/green]")
+        console.print(f"[green]Router '{escape(alias)}' removed.[/green]")
         return
 
     if sub == "status":
@@ -231,11 +232,11 @@ async def _cmd_router(arg: str, session: ChatSession, console: Console) -> None:
             return
         profile = session.config.get_router(session.router_alias)
         console.print(
-            f"Active router: {session.router_alias} ({profile.host}:{profile.port}, backend={profile.backend})"
+            f"Active router: {session.router_alias} ({profile.host}:{profile.effective_port}, backend={profile.backend})"
         )
         return
 
-    console.print(f"[yellow]Unknown /router subcommand: {sub}. Choices: list, select, add, remove, status.[/yellow]")
+    console.print(f"[yellow]Unknown /router subcommand: {escape(sub)}. Choices: list, select, add, remove, status.[/yellow]")
 
 
 async def _add_router(session: ChatSession, console: Console) -> None:
@@ -270,7 +271,7 @@ async def _add_router(session: ChatSession, console: Console) -> None:
     cli_config.save_config(session.config, session.config_path)
     session.connect_router(alias)
     session.persist_active_selection()
-    console.print(f"[green]◆ Router '{alias}' added and activated.[/green]")
+    console.print(f"[green]◆ Router '{escape(alias)}' added and activated.[/green]")
 
 
 async def _cmd_inspect(arg: str, session: ChatSession, console: Console) -> None:
@@ -287,7 +288,7 @@ async def _cmd_inspect(arg: str, session: ChatSession, console: Console) -> None
 
 
 async def _cmd_status(arg: str, session: ChatSession, console: Console) -> None:
-    console.print(f"[dim]{build_status_bar(session)}[/dim]")
+    console.print(f"[dim]{escape(build_status_bar(session))}[/dim]")
     table = _table("Session Status", "Field", "Value", show_header=False)
     table.add_row("Active router", session.router_alias or "(none)")
     table.add_row("Active provider", session.provider_name or "(none)")

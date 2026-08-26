@@ -1,4 +1,5 @@
 import contextlib
+from rich.markup import escape
 from mika.utils.printer.theme import console, Symbols
 from mika.utils.printer.components.panel import print_header, print_section
 from mika.utils.printer.components.separator import (
@@ -10,35 +11,35 @@ from mika.utils.printer.components.separator import (
 
 
 def log_info(message: str):
-    console.print(f"[info]{Symbols.INFO}[/info]  {message}")
+    console.print(f"[info]{Symbols.INFO}[/info]  {escape(str(message))}")
 
 
 def log_success(message: str):
-    console.print(f"[success]{Symbols.SUCCESS}[/success]  {message}")
+    console.print(f"[success]{Symbols.SUCCESS}[/success]  {escape(str(message))}")
 
 
 def log_warning(message: str):
-    console.print(f"[warning]{Symbols.WARNING}[/warning]  {message}")
+    console.print(f"[warning]{Symbols.WARNING}[/warning]  {escape(str(message))}")
 
 
 def log_error(message: str):
-    console.print(f"[error]{Symbols.ERROR}[/error]  {message}")
+    console.print(f"[error]{Symbols.ERROR}[/error]  {escape(str(message))}")
 
 
 def log_step(message: str):
-    console.print(f"[step]{Symbols.STEP}[/step]  {message}")
+    console.print(f"[step]{Symbols.STEP}[/step]  {escape(str(message))}")
 
 
 def log_tree(message: str, is_last: bool = False, level: int = 1):
     prefix = f"{Symbols.PIPE}" * (level - 1) if level > 1 else ""
     connector = Symbols.ELBOW if is_last else Symbols.TEE
-    console.print(f"[muted]{prefix}{connector}[/muted] {message}")
+    console.print(f"[muted]{prefix}{connector}[/muted] {escape(str(message))}")
 
 
 @contextlib.contextmanager
 def status_spinner(message: str):
     with console.status(
-        f"[cyan]{message}[/cyan]",
+        f"[cyan]{escape(str(message))}[/cyan]",
         spinner="bouncingBar",
         spinner_style="bold #c084fc",
     ) as status:

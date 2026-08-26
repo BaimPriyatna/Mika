@@ -233,3 +233,54 @@ def test_render_advice(console):
         options=["Option A", "Option B"],
         suggested_action="setup hotspot",
     )
+
+
+def test_render_advice_escapes_markup_like_content(console):
+    """AI-generated text mentioning RouterOS paths (e.g. '[/ip route]') must
+    not be interpreted as Rich markup and must not crash rendering."""
+    render.render_advice(
+        console,
+        "I will check [/ip route] before making changes.",
+        options=["Review [cyan]VLAN[/cyan] settings first"],
+        suggested_action="inspect [/ip firewall filter]",
+    )
+
+
+def test_render_interfaces_with_markup_like_comment_does_not_crash(console, minimal_ctx):
+    """A router-provided interface comment containing bracket syntax (e.g.
+    '[/ip route]') is untrusted data and must not be treated as Rich markup."""
+    ctx = RouterContext(
+        identity=minimal_ctx.identity,
+        system_resource=minimal_ctx.system_resource,
+        capabilities=minimal_ctx.capabilities,
+        interfaces=[
+            InterfaceInfo(
+                id="*1",
+                name="ether1",
+                type="ether",
+                running=True,
+                disabled=False,
+                mac_address="00:11:22:33:44:55",
+                comment="WAN uplink [/ip route] main",
+            )
+        ],
+    )
+    render.render_inspect(console, "interfaces", ctx)
+
+
+def test_render_firewall_with_markup_like_comment_does_not_crash(console, minimal_ctx):
+    ctx = RouterContext(
+        identity=minimal_ctx.identity,
+        system_resource=minimal_ctx.system_resource,
+        capabilities=minimal_ctx.capabilities,
+        firewall_rules=[
+            FirewallRuleInfo(
+                id="*1",
+                chain="forward",
+                action="accept",
+                disabled=False,
+                comment="allow LAN [admin] traffic",
+            )
+        ],
+    )
+    render.render_inspect(console, "firewall", ctx)

@@ -19,7 +19,7 @@ from mika.audit.models import (
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_DB_PATH = Path.home() / ".mikrotik-ai" / "app.db"
+_DEFAULT_DB_PATH = Path.home() / ".config" / "mika" / "app.db"
 
 _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS audit_records (

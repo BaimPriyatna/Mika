@@ -4,6 +4,7 @@ from collections.abc import Iterable
 
 from rich import box
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -27,13 +28,13 @@ def render_advice(
     suggested_action: str | None = None,
 ) -> None:
     console.print()
-    panel_body = f"[bold #c084fc]◆ Mika:[/bold #c084fc] {message}"
+    panel_body = f"[bold #c084fc]◆ Mika:[/bold #c084fc] {escape(message)}"
     if options:
         panel_body += "\n\n[bold cyan]Suggested Options:[/bold cyan]"
         for idx, opt in enumerate(options, 1):
-            panel_body += f"\n  [bold white]{idx}.[/bold white] {opt}"
+            panel_body += f"\n  [bold white]{idx}.[/bold white] {escape(opt)}"
     if suggested_action:
-        panel_body += f"\n\n[dim]Tip: You can say '[bold white]{suggested_action}[/bold white]' to proceed.[/dim]"
+        panel_body += f"\n\n[dim]Tip: You can say '[bold white]{escape(suggested_action)}[/bold white]' to proceed.[/dim]"
 
     console.print(Panel(panel_body, border_style="#7c3aed", padding=(0, 1), expand=False))
 
@@ -79,11 +80,11 @@ def _enabled(disabled: bool) -> str:
 
 
 def _render_router(console: Console, ctx: RouterContext) -> None:
-    table = _table(f"Router: {ctx.identity}", ("Field", "Value"), show_header=False)
-    table.add_row("RouterOS version", ctx.routeros_version)
-    table.add_row("Board", ctx.board_name)
-    table.add_row("Architecture", ctx.architecture)
-    table.add_row("Uptime", ctx.system_resource.uptime)
+    table = _table(f"Router: {escape(ctx.identity)}", ("Field", "Value"), show_header=False)
+    table.add_row("RouterOS version", escape(ctx.routeros_version))
+    table.add_row("Board", escape(ctx.board_name))
+    table.add_row("Architecture", escape(ctx.architecture))
+    table.add_row("Uptime", escape(ctx.system_resource.uptime))
     cpu = f"{ctx.system_resource.cpu_load}%" if ctx.system_resource.cpu_load is not None else "-"
     table.add_row("CPU load", cpu)
     console.print(table)
@@ -97,12 +98,12 @@ def _render_interfaces(console: Console, ctx: RouterContext) -> None:
     table = _table("Interfaces", ("Name", "Type", "Run", "State", "MAC", "Comment"))
     for iface in ctx.interfaces:
         table.add_row(
-            iface.name,
-            iface.type,
+            escape(iface.name),
+            escape(iface.type),
             _yes_no(iface.running),
             _enabled(iface.disabled),
-            iface.mac_address or "-",
-            iface.comment or "-",
+            escape(iface.mac_address) if iface.mac_address else "-",
+            escape(iface.comment) if iface.comment else "-",
         )
     console.print(table)
 
@@ -114,7 +115,7 @@ def _render_addresses(console: Console, ctx: RouterContext) -> None:
 
     table = _table("IP Addresses", ("Address", "Interface", "Network", "State"))
     for addr in ctx.addresses:
-        table.add_row(addr.address, addr.interface, addr.network, _enabled(addr.disabled))
+        table.add_row(escape(addr.address), escape(addr.interface), escape(addr.network), _enabled(addr.disabled))
     console.print(table)
 
 
@@ -126,8 +127,8 @@ def _render_routes(console: Console, ctx: RouterContext) -> None:
     table = _table("Routes", ("Destination", "Gateway", "Distance", "Active", "Static"))
     for route in ctx.routes:
         table.add_row(
-            route.dst_address,
-            route.gateway,
+            escape(route.dst_address),
+            escape(route.gateway),
             str(route.distance),
             _yes_no(route.active),
             _yes_no(route.static),
@@ -143,13 +144,13 @@ def _render_firewall(console: Console, ctx: RouterContext) -> None:
     table = _table("Firewall Rules", ("Chain", "Action", "Src", "Dst", "Protocol", "State", "Comment"))
     for rule in ctx.firewall_rules:
         table.add_row(
-            rule.chain,
-            rule.action,
-            rule.src_address or "-",
-            rule.dst_address or "-",
-            rule.protocol or "-",
+            escape(rule.chain),
+            escape(rule.action),
+            escape(rule.src_address) if rule.src_address else "-",
+            escape(rule.dst_address) if rule.dst_address else "-",
+            escape(rule.protocol) if rule.protocol else "-",
             _enabled(rule.disabled),
-            rule.comment or "-",
+            escape(rule.comment) if rule.comment else "-",
         )
     console.print(table)
 
@@ -159,10 +160,10 @@ def _render_dhcp(console: Console, ctx: RouterContext) -> None:
         table = _table("DHCP Servers", ("Name", "Interface", "Pool", "Lease Time", "State"))
         for server in ctx.dhcp_servers:
             table.add_row(
-                server.name,
-                server.interface,
-                server.address_pool or "-",
-                server.lease_time or "-",
+                escape(server.name),
+                escape(server.interface),
+                escape(server.address_pool) if server.address_pool else "-",
+                escape(server.lease_time) if server.lease_time else "-",
                 _enabled(server.disabled),
             )
         console.print(table)
@@ -173,11 +174,11 @@ def _render_dhcp(console: Console, ctx: RouterContext) -> None:
         leases = _table("DHCP Leases", ("Address", "MAC", "Server", "Status", "Hostname"))
         for lease in ctx.dhcp_leases:
             leases.add_row(
-                lease.address,
-                lease.mac_address or "-",
-                lease.server,
-                lease.status,
-                lease.host_name or "-",
+                escape(lease.address),
+                escape(lease.mac_address) if lease.mac_address else "-",
+                escape(lease.server),
+                escape(lease.status),
+                escape(lease.host_name) if lease.host_name else "-",
             )
         console.print(leases)
     else:
@@ -189,10 +190,10 @@ def _render_hotspot(console: Console, ctx: RouterContext) -> None:
         table = _table("Hotspot Servers", ("Name", "Interface", "Profile", "Pool", "State"))
         for server in ctx.hotspot_servers:
             table.add_row(
-                server.name,
-                server.interface,
-                server.profile or "-",
-                server.address_pool or "-",
+                escape(server.name),
+                escape(server.interface),
+                escape(server.profile) if server.profile else "-",
+                escape(server.address_pool) if server.address_pool else "-",
                 _enabled(server.disabled),
             )
         console.print(table)
@@ -202,7 +203,7 @@ def _render_hotspot(console: Console, ctx: RouterContext) -> None:
     if ctx.hotspot_users:
         users = _table("Hotspot Users", ("Name", "Profile", "State"))
         for user in ctx.hotspot_users:
-            users.add_row(user.name, user.profile or "-", _enabled(user.disabled))
+            users.add_row(escape(user.name), escape(user.profile) if user.profile else "-", _enabled(user.disabled))
         console.print(users)
     else:
         _empty(console, "Hotspot Users")

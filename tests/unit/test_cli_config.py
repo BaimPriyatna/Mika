@@ -74,3 +74,52 @@ def test_remember_model_deduplicates():
     cfg.remember_model("gemini", "gemini-1.5-flash")
     cfg.remember_model("gemini", "gemini-1.5-flash")
     assert len(cfg.models) == 1
+
+
+def test_effective_port_rest_backend_uses_port():
+    profile = cli_config.RouterProfileConfig(
+        host="192.168.88.1", username="admin", port=443, backend="rest"
+    )
+    assert profile.effective_port == 443
+
+
+def test_effective_port_mock_backend_uses_port():
+    profile = cli_config.RouterProfileConfig(
+        host="192.168.88.1", username="admin", port=443, backend="mock"
+    )
+    assert profile.effective_port == 443
+
+
+def test_effective_port_binary_backend_uses_api_port_when_set():
+    profile = cli_config.RouterProfileConfig(
+        host="192.168.88.1",
+        username="admin",
+        port=443,  # leftover REST-probe value from setup; must be ignored
+        backend="binary",
+        api_port=8728,
+    )
+    assert profile.effective_port == 8728
+
+
+def test_effective_port_binary_backend_falls_back_to_default_plain():
+    profile = cli_config.RouterProfileConfig(
+        host="192.168.88.1",
+        username="admin",
+        port=443,
+        backend="binary",
+        api_port=None,
+        api_ssl=False,
+    )
+    assert profile.effective_port == 8728
+
+
+def test_effective_port_binary_backend_falls_back_to_default_ssl():
+    profile = cli_config.RouterProfileConfig(
+        host="192.168.88.1",
+        username="admin",
+        port=443,
+        backend="binary",
+        api_port=None,
+        api_ssl=True,
+    )
+    assert profile.effective_port == 8729

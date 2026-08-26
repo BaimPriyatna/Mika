@@ -62,6 +62,21 @@ def test_session_connect_unknown_router_raises(session_with_mock_router):
         session.connect_router("unknown")
 
 
+def test_session_create_stale_active_router_does_not_crash(temp_config_path):
+    """active_router pointing at a profile that no longer exists must not
+    crash startup — it should fall back to "no active router" instead."""
+    cfg = cli_config.AppConfig(
+        routers={},
+        active_router="ghost-router",
+    )
+    cli_config.save_config(cfg, temp_config_path)
+
+    session = ChatSession.create(temp_config_path)
+
+    assert session.router_alias is None
+    assert session.config.active_router is None
+
+
 @patch("mika.cli.env_secrets.get_router_secret", return_value="password123")
 def test_session_connect_rest_router(mock_get_secret, temp_config_path):
     cfg = cli_config.AppConfig(

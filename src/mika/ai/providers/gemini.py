@@ -25,6 +25,7 @@ from mika.ai.errors import (
 )
 from mika.ai.prompts.builder import build_system_prompt, build_user_prompt
 from mika.ai.schemas import AnyIntent, IntentValidationError, parse_intent
+from mika.cli.wizard import register_model_fetcher
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ _BASE_URL = "https://generativelanguage.googleapis.com"
 _LIST_MODELS_PAGE_SIZE = 100
 
 
+@register_model_fetcher("gemini")
 async def list_models(
     api_key: str,
     *,

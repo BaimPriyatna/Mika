@@ -17,7 +17,11 @@ from mika.ai.providers.gemini import GeminiProvider
 from mika.audit.logger import AuditLogger
 from mika.cli import config as cli_config
 from mika.cli import env_secrets
-from mika.cli.errors import NoActiveRouterError, SecretNotFoundError
+from mika.cli.errors import (
+    NoActiveRouterError,
+    RouterProfileNotFoundError,
+    SecretNotFoundError,
+)
 from mika.executor.rollback import PlanBackup
 from mika.knowledge.loader import KnowledgeLoader
 from mika.knowledge.retriever import KnowledgeRetriever
@@ -90,8 +94,18 @@ class ChatSession:
         if cfg.active_router:
             try:
                 session.connect_router(cfg.active_router)
-            except (NoActiveRouterError, SecretNotFoundError, env_secrets.EnvFileError):
-                pass
+            except (
+                NoActiveRouterError,
+                SecretNotFoundError,
+                RouterProfileNotFoundError,
+                env_secrets.EnvFileError,
+            ):
+                # active_router may point to a profile that no longer
+                # exists (e.g. config.toml edited by hand, or removed via
+                # other tooling). Fall back to "no active router" instead
+                # of crashing the whole CLI on startup.
+                session.router_alias = None
+                session.config.active_router = None
         if cfg.active_provider and cfg.active_model:
             try:
                 session.activate_provider(cfg.active_provider, cfg.active_model)
@@ -115,7 +129,7 @@ class ChatSession:
                 profile_cfg.host,
                 profile_cfg.username,
                 password,
-                port=profile_cfg.api_port,
+                port=profile_cfg.effective_port,
                 use_ssl=profile_cfg.api_ssl,
                 ssl_cert_path=profile_cfg.api_ssl_cert,
                 ssl_verify=profile_cfg.api_ssl_verify,

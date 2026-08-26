@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 
 from mika.ai.context import AIContext
@@ -68,7 +69,7 @@ async def run_repl(session: ChatSession, console: Console | None = None) -> None
         try:
             await _handle_chat_turn(line.strip(), session, console)
         except Exception as exc:
-            console.print(f"[red]Unexpected error occurred: {exc or type(exc).__name__}[/red]")
+            console.print(f"[red]Unexpected error occurred: {escape(str(exc) or type(exc).__name__)}[/red]")
             console.print("[dim]Session continues. If this persists, please report it as a bug.[/dim]")
 
     console.print("[dim]Goodbye.[/dim]")
@@ -142,15 +143,15 @@ async def _handle_chat_turn(request: str, session: ChatSession, console: Console
 
         target = render.INTENT_TO_TARGET.get(intent.intent.value)
         if target is None:
-            console.print(f"[yellow]Read intent '{intent.intent.value}' does not have a matching view.[/yellow]")
+            console.print(f"[yellow]Read intent '{escape(intent.intent.value)}' does not have a matching view.[/yellow]")
             return
         if intent.reasoning:
-            console.print(f"\n[bold #c084fc]◆ Mika:[/bold #c084fc] {intent.reasoning}")
+            console.print(f"\n[bold #c084fc]◆ Mika:[/bold #c084fc] {escape(intent.reasoning)}")
         render.render_inspect(console, target, ctx)
         return
 
     if intent.reasoning:
-        console.print(f"\n[bold #c084fc]◆ Mika:[/bold #c084fc] {intent.reasoning}\n")
+        console.print(f"\n[bold #c084fc]◆ Mika:[/bold #c084fc] {escape(intent.reasoning)}\n")
 
     planner_fn = _PLANNERS.get(intent.intent.value)
     if planner_fn is None:
@@ -163,7 +164,7 @@ async def _handle_chat_turn(request: str, session: ChatSession, console: Console
     try:
         plan = planner_fn(intent, ctx)
     except PlannerError as exc:
-        console.print(f"[red]Plan generation failed: {exc}[/red]")
+        console.print(f"[red]Plan generation failed: {escape(str(exc))}[/red]")
         return
 
     try:
@@ -187,12 +188,12 @@ async def _handle_chat_turn(request: str, session: ChatSession, console: Console
     try:
         confirmation = prompt_for_confirmation(result.plan, result, console)
     except NonInteractiveContextError as exc:
-        console.print(f"[red]{exc}[/red]")
+        console.print(f"[red]{escape(str(exc))}[/red]")
         return
 
     if confirmation.status != ConfirmationStatus.CONFIRMED:
         if confirmation.feedback:
-            console.print(f"\n[cyan]Feedback received:[/cyan] {confirmation.feedback}")
+            console.print(f"\n[cyan]Feedback received:[/cyan] {escape(confirmation.feedback)}")
             console.print("[dim]Re-planning with your requested modifications...[/dim]\n")
             _audit(
                 session,
@@ -247,7 +248,7 @@ async def _handle_chat_turn(request: str, session: ChatSession, console: Console
         return
 
     if not exec_result.success:
-        console.print(f"[red]Execution failed: {exec_result.error or exec_result.summary}[/red]")
+        console.print(f"[red]Execution failed: {escape(str(exec_result.error or exec_result.summary))}[/red]")
         _audit(
             session,
             ctx,

@@ -16,7 +16,7 @@ console = Console()
 
 
 def _get_memory_manager() -> MemoryManager:
-    db_path = Path.home() / ".mikrotik-ai" / "memory.db"
+    db_path = Path.home() / ".config" / "mika" / "memory.db"
     return MemoryManager.from_path(db_path)
 
 

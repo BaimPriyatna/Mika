@@ -87,7 +87,7 @@ def plan_create_hotspot(intent: CreateHotspotIntent, router_context: RouterConte
             data={
                 "address": f"{gateway}/{network.prefixlen}",
                 "interface": intent.interface,
-                "comment": "created by mikrotik-ai: create_hotspot",
+                "comment": "created by mika: create_hotspot",
             },
         ),
         PlanStep(

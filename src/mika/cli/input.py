@@ -14,7 +14,7 @@ from prompt_toolkit.styles import Style
 
 from mika.cli.session import ChatSession
 
-_HISTORY_PATH = Path.home() / ".config" / "mikrotik-ai" / "chat_history"
+_HISTORY_PATH = Path.home() / ".config" / "mika" / "chat_history"
 
 _COMMANDS = {
     "/help": ("Show list of available commands", {}),

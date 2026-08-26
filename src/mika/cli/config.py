@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from mika.cli.errors import ConfigError, RouterProfileNotFoundError
 
-_DEFAULT_CONFIG_PATH = Path.home() / ".config" / "mikrotik-ai" / "config.toml"
+_DEFAULT_CONFIG_PATH = Path.home() / ".config" / "mika" / "config.toml"
 
 
 class RouterProfileConfig(BaseModel):
@@ -39,6 +39,24 @@ class RouterProfileConfig(BaseModel):
         default=False,
         description="Enable strict SSL certificate verification for binary API.",
     )
+
+    @property
+    def effective_port(self) -> int:
+        """The port actually used to connect, given this profile's backend.
+
+        For 'rest' and 'mock' backends this is simply `port`. For 'binary'
+        backend, `port` is unrelated (it may hold a leftover REST-probe
+        value from setup) — the real connection port is `api_port`, falling
+        back to the binary API defaults (8728 plaintext / 8729 SSL) when
+        `api_port` is unset. Use this instead of `port` anywhere a profile's
+        port is displayed or connected to, so display and connection logic
+        can never drift out of sync again.
+        """
+        if self.backend == "binary":
+            if self.api_port is not None:
+                return self.api_port
+            return 8729 if self.api_ssl else 8728
+        return self.port
 
 
 class ModelEntry(BaseModel):
