@@ -1,6 +1,6 @@
 [project]
 name = "mika"
-version = "0.1.0"
+version = "0.1.1"
 description = "AI-powered MikroTik RouterOS assistant - Natural language CLI for configuration, troubleshooting, and monitoring."
 requires-python = ">=3.12"
 dependencies = [
