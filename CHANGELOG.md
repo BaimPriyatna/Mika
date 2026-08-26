@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-08-27
+
+### Fixed
+- Fixed the REPL command completer showing a stale full subcommand list (e.g. `add, select, list, remove, status`) right after fully typing a subcommand and pressing space (e.g. `/router add `). Caused by a background-thread scheduling race in the completer; completion now runs synchronously since it involves no I/O.
+- `/provider` no longer risks two independently-settable notions of provider availability drifting out of sync (previously a hand-maintained `available` flag could claim a provider was ready when it had no registered model fetcher). A provider is now selectable if and only if it actually has a registered fetcher.
+
+### Added
+- `/provider` now detects an existing stored API key for a provider and offers **Use existing key / Replace API key / Cancel** instead of silently reusing or ignoring it.
+- Replacing an API key only overwrites the stored key after the new key is successfully validated against the provider; if the new key is rejected or the user cancels, the old key is left untouched.
+
+### Changed
+- `/provider <name>` no longer targets a specific provider by argument; `/provider` (no argument) already lists all available providers, so the extra entry point was removed.
+
 ## [0.1.1] - 2026-08-26
 
 ### Fixed

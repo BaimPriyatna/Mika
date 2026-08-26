@@ -187,6 +187,131 @@ class TestSelectModelAddFlow:
         assert {m.model for m in config.models} == {"model-a", "model-b"}
 
 
+class TestProviderRegistry:
+    """Verifies the production registration path itself -- these tests must
+    fail if @register_model_fetcher("gemini", ...) is ever removed from
+    gemini.py, without relying on any manual injection into _MODEL_FETCHERS."""
+
+    def test_gemini_fetcher_registered_via_real_production_import(self):
+        # Import the real module -- this is what triggers the decorator in
+        # production. No mocking/injection involved.
+        from mika.ai.providers.gemini import list_models as real_list_models
+
+        assert wizard._MODEL_FETCHERS.get("gemini") is real_list_models
+        assert wizard._PROVIDER_DISPLAY_NAMES.get("gemini") == "Google Gemini"
+
+    def test_provider_without_fetcher_is_not_selectable(self):
+        # "openai" is declared for display but has no registered fetcher
+        # (no module registers it yet) -- it must show up disabled, never
+        # selectable, in the picker.
+        choices = {c.value: c for c in wizard._provider_choices()}
+        assert "openai" in choices
+        assert choices["openai"].disabled
+
+    def test_provider_with_fetcher_is_selectable(self):
+        from mika.ai.providers.gemini import list_models  # noqa: F401  (ensures registration)
+
+        choices = {c.value: c for c in wizard._provider_choices()}
+        assert "gemini" in choices
+        assert not choices["gemini"].disabled
+
+    def test_no_choice_can_be_selectable_without_a_registered_fetcher(self):
+        """Structural invariant: every non-disabled choice must correspond
+        to an entry in _MODEL_FETCHERS. This is guaranteed by construction
+        (_provider_choices derives 'disabled' from _MODEL_FETCHERS
+        membership), but this test pins that invariant so a future refactor
+        can't silently reintroduce a second, independently-settable
+        availability flag."""
+        for choice in wizard._provider_choices():
+            if not choice.disabled:
+                assert choice.value in wizard._MODEL_FETCHERS
+
+
+class TestExistingApiKeyFlow:
+    @pytest.mark.asyncio
+    async def test_use_existing_key_skips_password_prompt_and_does_not_rewrite_secret(self):
+        wizard._MODEL_FETCHERS["gemini"] = AsyncMock(return_value=["gemini-1.5-flash"])
+
+        with (
+            patch("mika.cli.wizard.questionary.select") as mock_select,
+            patch("mika.cli.wizard.questionary.password") as mock_password,
+            patch("mika.cli.wizard.env_secrets.get_provider_secret", return_value="old-key"),
+            patch("mika.cli.wizard.env_secrets.set_provider_secret") as mock_set_secret,
+        ):
+            mock_select.side_effect = [_asked("gemini"), _asked("use")]
+
+            provider, models = await wizard.run_provider_wizard()
+
+        assert provider == "gemini"
+        assert models == ["gemini-1.5-flash"]
+        mock_password.assert_not_called()
+        mock_set_secret.assert_not_called()
+        wizard._MODEL_FETCHERS["gemini"].assert_awaited_once_with("old-key")
+
+    @pytest.mark.asyncio
+    async def test_replace_key_only_persists_new_key_after_successful_fetch(self):
+        wizard._MODEL_FETCHERS["gemini"] = AsyncMock(return_value=["gemini-1.5-pro"])
+
+        with (
+            patch("mika.cli.wizard.questionary.select") as mock_select,
+            patch("mika.cli.wizard.questionary.password") as mock_password,
+            patch("mika.cli.wizard.env_secrets.get_provider_secret", return_value="old-key"),
+            patch("mika.cli.wizard.env_secrets.set_provider_secret") as mock_set_secret,
+            patch("mika.cli.wizard.env_secrets.ensure_gitignored", return_value=False),
+        ):
+            mock_select.side_effect = [_asked("gemini"), _asked("replace")]
+            mock_password.return_value = _asked("new-key")
+
+            provider, models = await wizard.run_provider_wizard()
+
+        assert provider == "gemini"
+        assert models == ["gemini-1.5-pro"]
+        wizard._MODEL_FETCHERS["gemini"].assert_awaited_once_with("new-key")
+        mock_set_secret.assert_called_once_with("gemini", "new-key")
+
+    @pytest.mark.asyncio
+    async def test_replace_key_invalid_leaves_old_key_untouched(self):
+        """If the new key is rejected and the user declines to retry, the old
+        key must never have been deleted or overwritten (set_provider_secret
+        must never be called)."""
+        wizard._MODEL_FETCHERS["gemini"] = AsyncMock(side_effect=AIAuthenticationError("bad key"))
+
+        with (
+            patch("mika.cli.wizard.questionary.select") as mock_select,
+            patch("mika.cli.wizard.questionary.password") as mock_password,
+            patch("mika.cli.wizard.questionary.confirm") as mock_confirm,
+            patch("mika.cli.wizard.env_secrets.get_provider_secret", return_value="old-key"),
+            patch("mika.cli.wizard.env_secrets.set_provider_secret") as mock_set_secret,
+        ):
+            mock_select.side_effect = [_asked("gemini"), _asked("replace")]
+            mock_password.return_value = _asked("bad-new-key")
+            mock_confirm.return_value = _asked(False)  # decline retry
+
+            with pytest.raises(WizardCancelled):
+                await wizard.run_provider_wizard()
+
+        mock_set_secret.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cancel_leaves_old_key_untouched(self):
+        wizard._MODEL_FETCHERS["gemini"] = AsyncMock()
+
+        with (
+            patch("mika.cli.wizard.questionary.select") as mock_select,
+            patch("mika.cli.wizard.questionary.password") as mock_password,
+            patch("mika.cli.wizard.env_secrets.get_provider_secret", return_value="old-key"),
+            patch("mika.cli.wizard.env_secrets.set_provider_secret") as mock_set_secret,
+        ):
+            mock_select.side_effect = [_asked("gemini"), _asked("cancel")]
+
+            with pytest.raises(WizardCancelled):
+                await wizard.run_provider_wizard()
+
+        mock_password.assert_not_called()
+        mock_set_secret.assert_not_called()
+        wizard._MODEL_FETCHERS["gemini"].assert_not_awaited()
+
+
 def _asked(value):
     q = AsyncMock()
     q.ask_async = AsyncMock(return_value=value)

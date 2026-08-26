@@ -17,10 +17,10 @@ console = Console()
 _CUSTOM_MODEL_CHOICE = "__custom__"
 _MANUAL_HOST_CHOICE = "__manual__"
 
-_KNOWN_PROVIDERS: dict[str, tuple[str, bool]] = {
-    "gemini": ("Google Gemini", True),
-    "openai": ("OpenAI (coming soon)", False),
-    "local": ("Local model (coming soon)", False),
+_PROVIDER_DISPLAY_NAMES: dict[str, str] = {
+    "gemini": "Google Gemini",
+    "openai": "OpenAI (coming soon)",
+    "local": "Local model (coming soon)",
 }
 
 _WIZARD_STYLE = questionary.Style([
@@ -40,11 +40,36 @@ class WizardCancelled(CliError):
     pass
 
 
-def register_model_fetcher(provider: str) -> Callable:
+def register_model_fetcher(provider: str, display_name: str | None = None) -> Callable:
+    """Register a provider's model fetcher.
+
+    A provider is only ever selectable in the wizard if it has a fetcher
+    registered here -- there is no separate "available" flag to fall out of
+    sync. `display_name` is optional; if omitted, an existing entry in
+    `_PROVIDER_DISPLAY_NAMES` (or the raw provider key) is used.
+    """
     def decorator(fn: Callable[[str], Awaitable[list[str]]]) -> Callable:
         _MODEL_FETCHERS[provider] = fn
+        if display_name:
+            _PROVIDER_DISPLAY_NAMES[provider] = display_name
+        else:
+            _PROVIDER_DISPLAY_NAMES.setdefault(provider, provider)
         return fn
     return decorator
+
+
+def _provider_choices() -> list[questionary.Choice]:
+    """Build the provider picker choices. A provider is selectable if and
+    only if it has a registered model fetcher -- this makes it structurally
+    impossible for the picker to offer a provider whose fetcher is missing."""
+    return [
+        questionary.Choice(
+            title=label,
+            value=key,
+            disabled=None if key in _MODEL_FETCHERS else "coming soon",
+        )
+        for key, label in _PROVIDER_DISPLAY_NAMES.items()
+    ]
 
 
 async def scan_and_select_router(timeout: float = 5.0) -> MndpDevice | None:
@@ -147,17 +172,9 @@ async def select_inspect_target() -> str | None:
 
 
 async def run_provider_wizard() -> tuple[str, list[str]]:
-    choices = [
-        questionary.Choice(
-            title=label,
-            value=key,
-            disabled=None if available else "coming soon",
-        )
-        for key, (label, available) in _KNOWN_PROVIDERS.items()
-    ]
     provider = await questionary.select(
         "Select AI provider:",
-        choices=choices,
+        choices=_provider_choices(),
         style=_WIZARD_STYLE,
         qmark="◈",
     ).ask_async()
@@ -166,16 +183,38 @@ async def run_provider_wizard() -> tuple[str, list[str]]:
 
     fetcher = _MODEL_FETCHERS.get(provider)
     if fetcher is None:
+        # Defense-in-depth: unreachable via the picker itself (disabled
+        # choices can't be selected), but kept in case this is ever called
+        # with a provider key that bypasses _provider_choices().
         raise WizardCancelled(f"No model fetcher registered for provider '{provider}'.")
 
-    while True:
-        api_key = await questionary.password(
-            f"Enter API key for {provider}:",
+    existing_key = env_secrets.get_provider_secret(provider)
+    api_key = existing_key
+    if existing_key:
+        action = await questionary.select(
+            f"{provider} is already configured.",
+            choices=[
+                questionary.Choice(title="Use existing API key", value="use"),
+                questionary.Choice(title="Replace API key", value="replace"),
+                questionary.Choice(title="Cancel", value="cancel"),
+            ],
             style=_WIZARD_STYLE,
             qmark="◈",
         ).ask_async()
+        if action is None or action == "cancel":
+            raise WizardCancelled("Provider configuration cancelled.")
+        if action == "replace":
+            api_key = None  # fall through to key-entry loop below; old key stays untouched until fetch succeeds
+
+    while True:
         if api_key is None:
-            raise WizardCancelled("API key input cancelled.")
+            api_key = await questionary.password(
+                f"Enter API key for {provider}:",
+                style=_WIZARD_STYLE,
+                qmark="◈",
+            ).ask_async()
+            if api_key is None:
+                raise WizardCancelled("API key input cancelled.")
 
         try:
             with console.status(f"Connecting to {provider} to fetch model list..."):
@@ -187,6 +226,7 @@ async def run_provider_wizard() -> tuple[str, list[str]]:
             ).ask_async()
             if not retry:
                 raise WizardCancelled("API key rejected; user declined to retry.") from exc
+            api_key = None
             continue
         except AIError as exc:
             console.print(f"[yellow]Failed to fetch model list from {provider}:[/yellow] {exc}")
@@ -198,10 +238,12 @@ async def run_provider_wizard() -> tuple[str, list[str]]:
             model = await questionary.text("Model name:", style=_WIZARD_STYLE, qmark="◈").ask_async()
             if not model:
                 raise WizardCancelled("Custom model name cancelled or empty.") from exc
-            _persist_provider_secret(provider, api_key)
+            if api_key != existing_key:
+                _persist_provider_secret(provider, api_key)
             return provider, [model]
 
-        _persist_provider_secret(provider, api_key)
+        if api_key != existing_key:
+            _persist_provider_secret(provider, api_key)
         console.print(f"[green]{len(models)} models available for {provider}.[/green]")
         return provider, models
 

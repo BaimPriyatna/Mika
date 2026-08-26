@@ -123,12 +123,6 @@ async def _cmd_model(arg: str, session: ChatSession, console: Console) -> None:
 
 
 async def _cmd_provider(arg: str, session: ChatSession, console: Console) -> None:
-    if arg:
-        if session.cached_provider_secret(arg) or env_secrets.get_provider_secret(arg):
-            console.print(f"[dim]Provider '{escape(arg)}' is ready. Run /model to select active model.[/dim]")
-            return
-        console.print(f"[dim]No API key saved for '{escape(arg)}', launching wizard...[/dim]")
-
     provider_name, models = await wizard.run_provider_wizard()
     for model in models:
         session.config.remember_model(provider_name, model)

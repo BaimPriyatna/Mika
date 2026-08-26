@@ -35,7 +35,7 @@ _BASE_URL = "https://generativelanguage.googleapis.com"
 _LIST_MODELS_PAGE_SIZE = 100
 
 
-@register_model_fetcher("gemini")
+@register_model_fetcher("gemini", display_name="Google Gemini")
 async def list_models(
     api_key: str,
     *,

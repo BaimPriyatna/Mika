@@ -221,7 +221,13 @@ def build_prompt_session(session: ChatSession | None = None) -> PromptSession:
         completer=MikaCompleter(),
         style=_STYLE,
         complete_while_typing=True,
-        complete_in_thread=True,
+        # MikaCompleter does pure in-memory dict/string lookups — no I/O,
+        # nothing worth threading. Running it in a background thread only
+        # introduces a race: completion jobs for earlier keystrokes can
+        # resolve *after* jobs for later keystrokes and overwrite the menu
+        # with stale results (e.g. the full subcommand list from "/router "
+        # reappearing after the user has already typed "/router add ").
+        complete_in_thread=False,
     )
 
 
