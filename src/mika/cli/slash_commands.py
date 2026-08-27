@@ -8,7 +8,7 @@ from rich.table import Table
 
 from mika.cli import config as cli_config
 from mika.cli import env_secrets, render, wizard
-from mika.cli.errors import CliError, NoActiveRouterError
+from mika.cli.errors import CliError, NoActiveRouterError, SessionNotFoundError
 from mika.cli.input import build_status_bar
 from mika.cli.session import ChatSession
 from mika.router.discovery import discover
@@ -17,7 +17,7 @@ from mika.utils.printer import status_spinner
 HELP_TEXT = """\
 Available commands:
   /model [name]               Show or switch active AI model
-  /provider [name]            Configure AI provider & enter API key
+  /provider                   Configure AI provider & enter API key
   /router list                List registered routers
   /router select <alias>      Select active router
   /router add                 Register a new router (interactive wizard)
@@ -27,8 +27,10 @@ Available commands:
   /inspect <target>           View read-only data: router, interfaces,
                               addresses, routes, firewall, dhcp, hotspot
   /history                    Show conversation history for this session
+  /sessions                   List saved conversation sessions
+  /resume <#>                 Resume a saved conversation session
   /backup                     Show last backup info
-  /clear                      Clear screen & conversation history
+  /clear                      Clear screen & start a new session
   /reset                      Reset all configuration & saved secrets
   /help                       Show this help message
   /exit                       Exit REPL session
@@ -89,8 +91,8 @@ async def _cmd_exit(arg: str, session: ChatSession, console: Console) -> None:
 
 async def _cmd_clear(arg: str, session: ChatSession, console: Console) -> None:
     console.clear()
-    session.history.clear()
-    console.print("[dim]Screen and conversation history cleared.[/dim]")
+    session.start_new_session()
+    console.print("[dim]Screen and conversation history cleared. Started a new session.[/dim]")
 
 
 async def _cmd_history(arg: str, session: ChatSession, console: Console) -> None:
@@ -101,6 +103,41 @@ async def _cmd_history(arg: str, session: ChatSession, console: Console) -> None
     for entry in session.history:
         table.add_row(entry.role, entry.text)
     console.print(table)
+
+
+async def _cmd_sessions(arg: str, session: ChatSession, console: Console) -> None:
+    if session.session_store is None:
+        console.print("[yellow]Session storage is not available.[/yellow]")
+        return
+    summaries = session.session_store.list_sessions()
+    if not summaries:
+        console.print("[dim](no saved sessions)[/dim]")
+        return
+    table = _table("Sessions", "#", "Title", "Messages", "Updated")
+    for idx, s in enumerate(summaries, 1):
+        marker = " (current)" if s.id == session.session_id else ""
+        table.add_row(str(idx), escape(s.title) + marker, str(s.message_count), s.updated_at)
+    console.print(table)
+    console.print("[dim]Use /resume <#> to switch to a session.[/dim]")
+
+
+async def _cmd_resume(arg: str, session: ChatSession, console: Console) -> None:
+    if session.session_store is None:
+        console.print("[yellow]Session storage is not available.[/yellow]")
+        return
+    if not arg:
+        console.print("[yellow]Usage: /resume <#>  (see /sessions for the list)[/yellow]")
+        return
+    resolved = session.session_store.resolve_id(arg.strip())
+    if resolved is None:
+        console.print(f"[yellow]No session found matching '{escape(arg)}'. Use /sessions to list.[/yellow]")
+        return
+    try:
+        count = session.resume_session(resolved)
+    except SessionNotFoundError as exc:
+        console.print(f"[yellow]{escape(str(exc))}[/yellow]")
+        return
+    console.print(f"[green]Resumed session with {count} messages.[/green]")
 
 
 async def _cmd_model(arg: str, session: ChatSession, console: Console) -> None:
@@ -325,7 +362,7 @@ async def _cmd_reset(arg: str, session: ChatSession, console: Console) -> None:
     session.provider_name = None
     session.model_name = None
     session.provider = None
-    session.history.clear()
+    session.start_new_session()
 
     cli_config.save_config(session.config, session.config_path)
 
@@ -345,6 +382,8 @@ _HANDLERS = {
     "/exit": _cmd_exit,
     "/clear": _cmd_clear,
     "/history": _cmd_history,
+    "/sessions": _cmd_sessions,
+    "/resume": _cmd_resume,
     "/model": _cmd_model,
     "/provider": _cmd_provider,
     "/router": _cmd_router,

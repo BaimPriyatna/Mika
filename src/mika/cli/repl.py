@@ -120,6 +120,16 @@ async def _handle_chat_turn(request: str, session: ChatSession, console: Console
         router_identity=ctx.identity,
         routeros_version=ctx.routeros_version,
         interfaces=ctx.interface_names,
+        # Exclude the just-appended current request (last entry) — it's
+        # already included separately as <user_request> in the prompt.
+        recent_history=[
+            f"{entry.role}: {entry.text}" for entry in session.recent_context_turns()[:-1]
+        ],
+        memory_facts_text=(
+            session.memory_manager.get_context(router_id=session.router_alias).to_prompt_text()
+            if session.memory_manager is not None
+            else None
+        ),
     )
 
     try:

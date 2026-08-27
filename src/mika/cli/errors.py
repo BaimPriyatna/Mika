@@ -19,3 +19,7 @@ class NoActiveRouterError(CliError):
 
 class SecretNotFoundError(CliError):
     pass
+
+
+class SessionNotFoundError(CliError):
+    pass

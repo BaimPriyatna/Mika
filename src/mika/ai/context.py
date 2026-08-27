@@ -40,6 +40,14 @@ class AIContext(BaseModel):
         default_factory=list,
         description="Explicit constraints (e.g. 'Do not modify ether1 WAN').",
     )
+    recent_history: list[str] = Field(
+        default_factory=list,
+        description="Recent conversation turns in this session, oldest first, formatted as 'role: text'.",
+    )
+    memory_facts_text: str | None = Field(
+        default=None,
+        description="Formatted long-term remembered facts/preferences for this user/router (from MemoryContext.to_prompt_text()).",
+    )
     extra: dict[str, Any] = Field(
         default_factory=dict,
         description="Optional additional metadata.",

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-08-27
+
+### Added
+- Conversation sessions now persist across `mika` restarts (previously lost when the app closed). A new session starts automatically on every launch.
+- `/sessions` lists saved conversation sessions; `/resume <#>` continues an earlier one.
+- The AI now receives recent conversation history and long-term remembered facts (previously stored but never actually read by the AI) as part of its context for each turn.
+
+### Changed
+- `/clear` and `/reset` now start a fresh persisted session instead of only clearing the in-memory display.
+
 ## [0.1.2] - 2026-08-27
 
 ### Fixed

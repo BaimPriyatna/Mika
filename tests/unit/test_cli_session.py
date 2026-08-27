@@ -25,7 +25,13 @@ def temp_config_path():
 
 
 @pytest.fixture
-def session_with_mock_router(temp_config_path):
+def temp_memory_db_path():
+    with tempfile.TemporaryDirectory() as tmp:
+        yield Path(tmp) / "memory.db"
+
+
+@pytest.fixture
+def session_with_mock_router(temp_config_path, temp_memory_db_path):
     cfg = cli_config.AppConfig(
         routers={
             "mock-router": cli_config.RouterProfileConfig(
@@ -37,13 +43,13 @@ def session_with_mock_router(temp_config_path):
         }
     )
     cli_config.save_config(cfg, temp_config_path)
-    session = ChatSession.create(temp_config_path)
+    session = ChatSession.create(temp_config_path, temp_memory_db_path)
     return session
 
 
-def test_session_create_empty_config(temp_config_path):
+def test_session_create_empty_config(temp_config_path, temp_memory_db_path):
     temp_config_path.unlink()
-    session = ChatSession.create(temp_config_path)
+    session = ChatSession.create(temp_config_path, temp_memory_db_path)
     assert session.router_alias is None
     assert session.provider is None
     assert session.history == []
@@ -62,7 +68,7 @@ def test_session_connect_unknown_router_raises(session_with_mock_router):
         session.connect_router("unknown")
 
 
-def test_session_create_stale_active_router_does_not_crash(temp_config_path):
+def test_session_create_stale_active_router_does_not_crash(temp_config_path, temp_memory_db_path):
     """active_router pointing at a profile that no longer exists must not
     crash startup — it should fall back to "no active router" instead."""
     cfg = cli_config.AppConfig(
@@ -71,14 +77,14 @@ def test_session_create_stale_active_router_does_not_crash(temp_config_path):
     )
     cli_config.save_config(cfg, temp_config_path)
 
-    session = ChatSession.create(temp_config_path)
+    session = ChatSession.create(temp_config_path, temp_memory_db_path)
 
     assert session.router_alias is None
     assert session.config.active_router is None
 
 
 @patch("mika.cli.env_secrets.get_router_secret", return_value="password123")
-def test_session_connect_rest_router(mock_get_secret, temp_config_path):
+def test_session_connect_rest_router(mock_get_secret, temp_config_path, temp_memory_db_path):
     cfg = cli_config.AppConfig(
         routers={
             "lab": cli_config.RouterProfileConfig(
@@ -90,7 +96,7 @@ def test_session_connect_rest_router(mock_get_secret, temp_config_path):
         }
     )
     cli_config.save_config(cfg, temp_config_path)
-    session = ChatSession.create(temp_config_path)
+    session = ChatSession.create(temp_config_path, temp_memory_db_path)
     session.connect_router("lab")
     assert session.router_alias == "lab"
     assert session.router_client is not None
@@ -98,7 +104,7 @@ def test_session_connect_rest_router(mock_get_secret, temp_config_path):
 
 
 @patch("mika.cli.env_secrets.get_router_secret", return_value=None)
-def test_session_connect_rest_without_password_raises(mock_get_secret, temp_config_path):
+def test_session_connect_rest_without_password_raises(mock_get_secret, temp_config_path, temp_memory_db_path):
     cfg = cli_config.AppConfig(
         routers={
             "lab": cli_config.RouterProfileConfig(
@@ -109,7 +115,7 @@ def test_session_connect_rest_without_password_raises(mock_get_secret, temp_conf
         }
     )
     cli_config.save_config(cfg, temp_config_path)
-    session = ChatSession.create(temp_config_path)
+    session = ChatSession.create(temp_config_path, temp_memory_db_path)
     with pytest.raises(SecretNotFoundError, match="No stored password"):
         session.connect_router("lab")
 
@@ -221,3 +227,70 @@ def test_session_persist_active_selection(session_with_mock_router, temp_config_
 def test_session_close(session_with_mock_router):
     session = session_with_mock_router
     session.close()
+
+
+def test_add_history_persists_to_session_store(session_with_mock_router):
+    session = session_with_mock_router
+    session.add_history("user", "hello router")
+
+    messages = session.session_store.get_messages(session.session_id)
+    assert [(m.role, m.text) for m in messages] == [("user", "hello router")]
+
+
+def test_recent_context_turns_respects_limit(session_with_mock_router):
+    session = session_with_mock_router
+    for i in range(5):
+        session.add_history("user", f"msg{i}")
+
+    turns = session.recent_context_turns(limit=2)
+    assert [t.text for t in turns] == ["msg3", "msg4"]
+
+
+def test_recent_context_turns_zero_limit_returns_empty(session_with_mock_router):
+    session = session_with_mock_router
+    session.add_history("user", "hello")
+    assert session.recent_context_turns(limit=0) == []
+
+
+def test_start_new_session_clears_history_and_gets_new_id(session_with_mock_router):
+    session = session_with_mock_router
+    old_id = session.session_id
+    session.add_history("user", "old session message")
+
+    session.start_new_session()
+
+    assert session.session_id != old_id
+    assert session.history == []
+    # old session's message is still persisted, just not active anymore
+    old_messages = session.session_store.get_messages(old_id)
+    assert [m.text for m in old_messages] == ["old session message"]
+
+
+def test_resume_session_loads_past_messages(session_with_mock_router):
+    session = session_with_mock_router
+    session.add_history("user", "first message")
+    session.add_history("assistant", "intent=inspect_router")
+    old_id = session.session_id
+
+    session.start_new_session()
+    assert session.history == []
+
+    count = session.resume_session(old_id)
+
+    assert count == 2
+    assert [(h.role, h.text) for h in session.history] == [
+        ("user", "first message"),
+        ("assistant", "intent=inspect_router"),
+    ]
+    assert session.session_id == old_id
+    # new messages now append to the resumed session
+    session.add_history("user", "continuing")
+    assert session.session_store.get_messages(old_id)[-1].text == "continuing"
+
+
+def test_resume_session_unknown_id_raises(session_with_mock_router):
+    from mika.cli.errors import SessionNotFoundError
+
+    session = session_with_mock_router
+    with pytest.raises(SessionNotFoundError):
+        session.resume_session("does-not-exist")

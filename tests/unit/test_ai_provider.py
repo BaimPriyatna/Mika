@@ -468,3 +468,30 @@ class TestPromptBuilder:
         assert "<safety_constraints>" in up
         assert "- Do not touch ether1 WAN" in up
         assert "<user_request>\nsetup hotspot on ether3\n</user_request>" in up
+
+    def test_user_prompt_with_conversation_history(self):
+        ctx = AIContext(recent_history=["user: show interfaces", "assistant: intent=inspect_interfaces"])
+
+        up = build_user_prompt("now show routes", ctx)
+
+        assert "<conversation_history>" in up
+        assert "user: show interfaces" in up
+        assert "assistant: intent=inspect_interfaces" in up
+        assert "</conversation_history>" in up
+
+    def test_user_prompt_without_history_omits_tag(self):
+        up = build_user_prompt("show routes")
+        assert "<conversation_history>" not in up
+
+    def test_user_prompt_with_memory_facts(self):
+        ctx = AIContext(memory_facts_text="- prefers VLAN 10 for guest network")
+
+        up = build_user_prompt("setup guest wifi", ctx)
+
+        assert "<remembered_preferences>" in up
+        assert "prefers VLAN 10 for guest network" in up
+        assert "</remembered_preferences>" in up
+
+    def test_user_prompt_without_memory_facts_omits_tag(self):
+        up = build_user_prompt("show routes")
+        assert "<remembered_preferences>" not in up

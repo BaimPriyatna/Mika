@@ -27,6 +27,8 @@ def mock_session():
     session.last_backup = None
     session.config = Mock(routers={})
     session.config_path = Path("/tmp/mock_config.toml")
+    session.session_store = Mock()
+    session.session_id = "current-session-id"
     return session
 
 
@@ -62,7 +64,7 @@ async def test_dispatch_quit_is_unknown(console, mock_session):
 async def test_cmd_clear(console, mock_session):
     mock_session.history = [HistoryEntry("user", "test")]
     await slash_commands._cmd_clear("", mock_session, console)
-    assert len(mock_session.history) == 0
+    mock_session.start_new_session.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -77,6 +79,77 @@ async def test_cmd_history_with_entries(console, mock_session):
         HistoryEntry("assistant", "intent=inspect_router"),
     ]
     await slash_commands._cmd_history("", mock_session, console)
+
+
+@pytest.mark.asyncio
+async def test_cmd_sessions_no_store(console, mock_session):
+    mock_session.session_store = None
+    await slash_commands._cmd_sessions("", mock_session, console)
+
+
+@pytest.mark.asyncio
+async def test_cmd_sessions_empty(console, mock_session):
+    mock_session.session_store.list_sessions.return_value = []
+    await slash_commands._cmd_sessions("", mock_session, console)
+
+
+@pytest.mark.asyncio
+async def test_cmd_sessions_lists_summaries(console, mock_session):
+    from mika.memory.sessions import SessionSummary
+
+    mock_session.session_store.list_sessions.return_value = [
+        SessionSummary(
+            id="current-session-id",
+            title="fix vlan 10",
+            started_at="2026-08-27T00:00:00",
+            updated_at="2026-08-27T00:05:00",
+            message_count=4,
+        ),
+        SessionSummary(
+            id="other-id",
+            title="check firewall",
+            started_at="2026-08-26T00:00:00",
+            updated_at="2026-08-26T00:05:00",
+            message_count=2,
+        ),
+    ]
+    await slash_commands._cmd_sessions("", mock_session, console)
+
+
+@pytest.mark.asyncio
+async def test_cmd_resume_no_store(console, mock_session):
+    mock_session.session_store = None
+    await slash_commands._cmd_resume("1", mock_session, console)
+
+
+@pytest.mark.asyncio
+async def test_cmd_resume_no_arg(console, mock_session):
+    await slash_commands._cmd_resume("", mock_session, console)
+    mock_session.session_store.resolve_id.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cmd_resume_unresolvable_id(console, mock_session):
+    mock_session.session_store.resolve_id.return_value = None
+    await slash_commands._cmd_resume("nope", mock_session, console)
+    mock_session.resume_session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cmd_resume_success(console, mock_session):
+    mock_session.session_store.resolve_id.return_value = "resolved-id"
+    mock_session.resume_session.return_value = 7
+    await slash_commands._cmd_resume("2", mock_session, console)
+    mock_session.resume_session.assert_called_once_with("resolved-id")
+
+
+@pytest.mark.asyncio
+async def test_cmd_resume_not_found_error(console, mock_session):
+    from mika.cli.errors import SessionNotFoundError
+
+    mock_session.session_store.resolve_id.return_value = "resolved-id"
+    mock_session.resume_session.side_effect = SessionNotFoundError("no such session")
+    await slash_commands._cmd_resume("2", mock_session, console)
 
 
 @pytest.mark.asyncio

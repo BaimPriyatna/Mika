@@ -21,10 +21,13 @@ from mika.cli.errors import (
     NoActiveRouterError,
     RouterProfileNotFoundError,
     SecretNotFoundError,
+    SessionNotFoundError,
 )
 from mika.executor.rollback import PlanBackup
 from mika.knowledge.loader import KnowledgeLoader
 from mika.knowledge.retriever import KnowledgeRetriever
+from mika.memory.manager import MemoryManager
+from mika.memory.sessions import SessionStore
 from mika.planner.plan import Plan
 from mika.router.client import RouterClient
 from mika.router.binary import BinaryRouterClient
@@ -34,7 +37,12 @@ from mika.router.rest import RestRouterClient
 
 _DEFAULT_KNOWLEDGE_ROOT = Path(__file__).resolve().parents[3] / "knowledge"
 
+# Shared SQLite file for both long-term facts (MemoryStorage) and persisted
+# conversation sessions (SessionStore) -- same file, different tables.
+_DEFAULT_MEMORY_DB_PATH = Path.home() / ".config" / "mika" / "memory.db"
+
 _MAX_HISTORY = 200
+_MAX_CONTEXT_TURNS = 20
 
 
 def _empty_mock_profile() -> RouterProfile:
@@ -75,21 +83,35 @@ class ChatSession:
 
     history: list[HistoryEntry] = field(default_factory=list)
 
+    memory_manager: MemoryManager | None = None
+    session_store: SessionStore | None = None
+    session_id: str | None = None
+
     last_plan: Plan | None = None
     last_backup: PlanBackup | None = None
 
 
     @classmethod
-    def create(cls, config_path: Path | None = None) -> "ChatSession":
+    def create(
+        cls,
+        config_path: Path | None = None,
+        memory_db_path: Path | None = None,
+    ) -> "ChatSession":
         path = config_path if config_path is not None else cli_config.default_config_path()
         cfg = cli_config.load_config(path)
         knowledge_root = _DEFAULT_KNOWLEDGE_ROOT
         documents = KnowledgeLoader(root=knowledge_root).load_all() if knowledge_root.is_dir() else []
+        db_path = memory_db_path if memory_db_path is not None else _DEFAULT_MEMORY_DB_PATH
+        memory_manager = MemoryManager.from_path(db_path)
+        session_store = SessionStore(db_path)
         session = cls(
             config=cfg,
             config_path=path,
             audit_logger=AuditLogger(),
             knowledge_retriever=KnowledgeRetriever(documents),
+            memory_manager=memory_manager,
+            session_store=session_store,
+            session_id=session_store.create_session(),
         )
         if cfg.active_router:
             try:
@@ -203,6 +225,37 @@ class ChatSession:
         self.history.append(HistoryEntry(role=role, text=text))
         if len(self.history) > _MAX_HISTORY:
             del self.history[: len(self.history) - _MAX_HISTORY]
+        if self.session_store is not None and self.session_id is not None:
+            self.session_store.add_message(self.session_id, role, text)
+
+    def recent_context_turns(self, limit: int = _MAX_CONTEXT_TURNS) -> list[HistoryEntry]:
+        """Recent conversation turns to feed the AI as context, oldest first."""
+        if limit <= 0:
+            return []
+        return self.history[-limit:]
+
+    def start_new_session(self) -> None:
+        """Begin a fresh persisted conversation session, clearing in-memory
+        history. The previous session remains stored and can be resumed
+        later via /resume."""
+        self.history.clear()
+        if self.session_store is not None:
+            self.session_id = self.session_store.create_session()
+
+    def resume_session(self, session_id: str) -> int:
+        """Load a past session's messages into current in-memory history and
+        continue appending new messages to that same session. Returns the
+        number of messages loaded."""
+        if self.session_store is None:
+            raise SessionNotFoundError("No session store available.")
+        if not self.session_store.session_exists(session_id):
+            raise SessionNotFoundError(f"No session found matching '{session_id}'.")
+        messages = self.session_store.get_messages(session_id)
+        self.history = [HistoryEntry(role=m.role, text=m.text) for m in messages]
+        if len(self.history) > _MAX_HISTORY:
+            del self.history[: len(self.history) - _MAX_HISTORY]
+        self.session_id = session_id
+        return len(messages)
 
 
     @staticmethod
