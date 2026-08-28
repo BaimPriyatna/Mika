@@ -291,7 +291,14 @@ async def _handle_chat_turn(request: str, session: ChatSession, console: Console
     else:
         log_success("Plan successfully executed and verified.")
 
-    session.add_history("assistant", exec_result.summary or "(completed)")
+    message_id = session.add_history("assistant", exec_result.summary or "(completed)")
+    if (
+        outcome == AuditOutcome.SUCCESS
+        and session.backup_store is not None
+        and message_id is not None
+        and session.router_alias is not None
+    ):
+        session.backup_store.add_backup(session.session_id, message_id, session.router_alias, backup)
 
     _audit(
         session,

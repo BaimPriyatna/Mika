@@ -2,8 +2,10 @@
 Conversation Session Persistence.
 
 Stores conversation sessions and their messages so they survive across
-`mika` restarts. A new session is started by default on every launch;
-past sessions can be listed and resumed explicitly (/sessions, /resume).
+`mika` restarts. A new session is started by default on every launch, and
+also whenever the active router is switched to a different one (so each
+session's messages all belong to a single router). Past sessions can be
+browsed and resumed via /history (grouped by router, then by session).
 """
 
 from __future__ import annotations
@@ -22,10 +24,18 @@ class SessionSummary:
     started_at: str
     updated_at: str
     message_count: int
+    router_alias: str | None
+
+
+@dataclass
+class RouterSessionGroup:
+    router_alias: str | None  # None = sessions created before any router was ever selected
+    session_count: int
 
 
 @dataclass
 class SessionMessage:
+    id: int
     role: str
     text: str
     created_at: str
@@ -43,6 +53,7 @@ class SessionStore:
                 CREATE TABLE IF NOT EXISTS sessions (
                     id TEXT PRIMARY KEY,
                     title TEXT NOT NULL,
+                    router_alias TEXT,
                     started_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
@@ -63,24 +74,27 @@ class SessionStore:
             """)
             conn.commit()
 
-    def create_session(self) -> str:
+    def create_session(self, router_alias: str | None = None) -> str:
         session_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
-                "INSERT INTO sessions (id, title, started_at, updated_at) VALUES (?, ?, ?, ?)",
-                (session_id, "", now, now),
+                "INSERT INTO sessions (id, title, router_alias, started_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (session_id, "", router_alias, now, now),
             )
             conn.commit()
         return session_id
 
-    def add_message(self, session_id: str, role: str, text: str) -> None:
+    def add_message(self, session_id: str, role: str, text: str) -> int:
+        """Persist a message and return its row id (used to anchor rewind
+        points and plan backups to a precise point in the conversation)."""
         now = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
+            cursor = conn.execute(
                 "INSERT INTO session_messages (session_id, role, text, created_at) VALUES (?, ?, ?, ?)",
                 (session_id, role, text, now),
             )
+            message_id = cursor.lastrowid
             # Keep the session's title as its first user message, and bump updated_at.
             row = conn.execute(
                 "SELECT title FROM sessions WHERE id = ?", (session_id,)
@@ -99,22 +113,48 @@ class SessionStore:
                     (now, session_id),
                 )
             conn.commit()
+        return message_id
 
-    def list_sessions(self, limit: int = 20) -> list[SessionSummary]:
+    def list_routers_with_sessions(self) -> list[RouterSessionGroup]:
+        """Level-1 grouping for /history: one entry per router that has at
+        least one saved session, plus a '(no router)' bucket for sessions
+        created before any router was ever selected. Ordered by most
+        recently active."""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                """
-                SELECT s.id, s.title, s.started_at, s.updated_at,
-                       COUNT(m.id) AS message_count
-                FROM sessions s
-                LEFT JOIN session_messages m ON m.session_id = s.id
-                GROUP BY s.id
-                ORDER BY s.updated_at DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
+            rows = conn.execute("""
+                SELECT router_alias, COUNT(*) AS session_count, MAX(updated_at) AS last_active
+                FROM sessions
+                GROUP BY router_alias
+                ORDER BY last_active DESC
+            """).fetchall()
+        return [
+            RouterSessionGroup(router_alias=row["router_alias"], session_count=row["session_count"])
+            for row in rows
+        ]
+
+    def list_sessions(self, router_alias: str | None = "__any__", limit: int = 50) -> list[SessionSummary]:
+        """List sessions, most recently updated first. `router_alias`:
+        - "__any__" (default): no filter, all sessions
+        - None: only sessions with no router (router_alias IS NULL)
+        - a string: only sessions for that router
+        """
+        query = """
+            SELECT s.id, s.title, s.router_alias, s.started_at, s.updated_at,
+                   COUNT(m.id) AS message_count
+            FROM sessions s
+            LEFT JOIN session_messages m ON m.session_id = s.id
+        """
+        params: list = []
+        if router_alias != "__any__":
+            query += " WHERE s.router_alias IS ?"
+            params.append(router_alias)
+        query += " GROUP BY s.id ORDER BY s.updated_at DESC LIMIT ?"
+        params.append(limit)
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(query, params).fetchall()
         return [
             SessionSummary(
                 id=row["id"],
@@ -122,20 +162,37 @@ class SessionStore:
                 started_at=row["started_at"],
                 updated_at=row["updated_at"],
                 message_count=row["message_count"],
+                router_alias=row["router_alias"],
             )
             for row in rows
         ]
 
     def get_messages(self, session_id: str, limit: int | None = None) -> list[SessionMessage]:
-        query = "SELECT role, text, created_at FROM session_messages WHERE session_id = ? ORDER BY id ASC"
-        params: list = [session_id]
+        query = "SELECT id, role, text, created_at FROM session_messages WHERE session_id = ? ORDER BY id ASC"
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute(query, params).fetchall()
-        messages = [SessionMessage(role=r["role"], text=r["text"], created_at=r["created_at"]) for r in rows]
+            rows = conn.execute(query, [session_id]).fetchall()
+        messages = [
+            SessionMessage(id=r["id"], role=r["role"], text=r["text"], created_at=r["created_at"])
+            for r in rows
+        ]
         if limit is not None and len(messages) > limit:
             messages = messages[-limit:]
         return messages
+
+    def trim_after(self, session_id: str, message_id: int) -> int:
+        """Delete messages after `message_id` in this session (used after a
+        successful /rewind so future history stays consistent with the
+        rolled-back router config). Returns the number of rows deleted."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "DELETE FROM session_messages WHERE session_id = ? AND id > ?",
+                (session_id, message_id),
+            )
+            now = datetime.now(timezone.utc).isoformat()
+            conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (now, session_id))
+            conn.commit()
+        return cursor.rowcount
 
     def session_exists(self, session_id: str) -> bool:
         with sqlite3.connect(self.db_path) as conn:

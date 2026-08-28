@@ -23,3 +23,7 @@ class SecretNotFoundError(CliError):
 
 class SessionNotFoundError(CliError):
     pass
+
+
+class RewindError(CliError):
+    pass

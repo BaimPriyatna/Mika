@@ -68,35 +68,50 @@ async def test_cmd_clear(console, mock_session):
 
 
 @pytest.mark.asyncio
-async def test_cmd_history_empty(console, mock_session):
-    await slash_commands._cmd_history("", mock_session, console)
-
-
-@pytest.mark.asyncio
-async def test_cmd_history_with_entries(console, mock_session):
-    mock_session.history = [
-        HistoryEntry("user", "hello"),
-        HistoryEntry("assistant", "intent=inspect_router"),
-    ]
-    await slash_commands._cmd_history("", mock_session, console)
-
-
-@pytest.mark.asyncio
-async def test_cmd_sessions_no_store(console, mock_session):
+async def test_cmd_history_no_store(console, mock_session):
     mock_session.session_store = None
-    await slash_commands._cmd_sessions("", mock_session, console)
+    await slash_commands._cmd_history("", mock_session, console)
 
 
 @pytest.mark.asyncio
-async def test_cmd_sessions_empty(console, mock_session):
-    mock_session.session_store.list_sessions.return_value = []
-    await slash_commands._cmd_sessions("", mock_session, console)
+async def test_cmd_history_no_saved_sessions(console, mock_session):
+    mock_session.session_store.list_routers_with_sessions.return_value = []
+    await slash_commands._cmd_history("", mock_session, console)
+
+
+def _router_group(router_alias, count):
+    from mika.memory.sessions import RouterSessionGroup
+
+    return RouterSessionGroup(router_alias=router_alias, session_count=count)
+
+
+def _two_selects(router_return, session_return):
+    """questionary.select is called twice by _cmd_history (router picker,
+    then session picker) -- return a factory yielding one mock per call."""
+    calls = iter([router_return, session_return])
+
+    def _factory(*args, **kwargs):
+        q = AsyncMock()
+        q.ask_async = AsyncMock(return_value=next(calls))
+        return q
+
+    return _factory
 
 
 @pytest.mark.asyncio
-async def test_cmd_sessions_lists_summaries(console, mock_session):
+async def test_cmd_history_cancel_at_router_step(console, mock_session):
+    mock_session.session_store.list_routers_with_sessions.return_value = [_router_group("lab", 1)]
+    with patch("questionary.select", side_effect=_two_selects(None, "unused")):
+        await slash_commands._cmd_history("", mock_session, console)
+    mock_session.session_store.list_sessions.assert_not_called()
+    mock_session.resume_session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cmd_history_cancel_at_session_step(console, mock_session):
     from mika.memory.sessions import SessionSummary
 
+    mock_session.session_store.list_routers_with_sessions.return_value = [_router_group("lab", 1)]
     mock_session.session_store.list_sessions.return_value = [
         SessionSummary(
             id="current-session-id",
@@ -104,6 +119,73 @@ async def test_cmd_sessions_lists_summaries(console, mock_session):
             started_at="2026-08-27T00:00:00",
             updated_at="2026-08-27T00:05:00",
             message_count=4,
+            router_alias="lab",
+        ),
+    ]
+    with patch("questionary.select", side_effect=_two_selects("lab", None)):
+        await slash_commands._cmd_history("", mock_session, console)
+    mock_session.resume_session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cmd_history_no_router_bucket_uses_sentinel_not_none(console, mock_session):
+    """The '(no router)' group's value must not be confused with Esc/None."""
+    from mika.memory.sessions import SessionSummary
+
+    mock_session.session_store.list_routers_with_sessions.return_value = [_router_group(None, 1)]
+    mock_session.session_store.list_sessions.return_value = [
+        SessionSummary(
+            id="current-session-id",
+            title="no router yet",
+            started_at="2026-08-27T00:00:00",
+            updated_at="2026-08-27T00:05:00",
+            message_count=1,
+            router_alias=None,
+        ),
+    ]
+    mock_session.history = [HistoryEntry("user", "no router yet")]
+
+    with patch("questionary.select", side_effect=_two_selects(slash_commands._NO_ROUTER_SENTINEL, "current-session-id")):
+        await slash_commands._cmd_history("", mock_session, console)
+
+    mock_session.session_store.list_sessions.assert_called_once_with(router_alias=None)
+    mock_session.resume_session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cmd_history_select_current_session_just_shows_transcript(console, mock_session):
+    from mika.memory.sessions import SessionSummary
+
+    mock_session.session_store.list_routers_with_sessions.return_value = [_router_group("lab", 1)]
+    mock_session.session_store.list_sessions.return_value = [
+        SessionSummary(
+            id="current-session-id",
+            title="fix vlan 10",
+            started_at="2026-08-27T00:00:00",
+            updated_at="2026-08-27T00:05:00",
+            message_count=1,
+            router_alias="lab",
+        ),
+    ]
+    mock_session.history = [HistoryEntry("user", "fix vlan 10")]
+    with patch("questionary.select", side_effect=_two_selects("lab", "current-session-id")):
+        await slash_commands._cmd_history("", mock_session, console)
+    mock_session.resume_session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cmd_history_select_other_session_switches(console, mock_session):
+    from mika.memory.sessions import SessionSummary
+
+    mock_session.session_store.list_routers_with_sessions.return_value = [_router_group("lab", 2)]
+    mock_session.session_store.list_sessions.return_value = [
+        SessionSummary(
+            id="current-session-id",
+            title="fix vlan 10",
+            started_at="2026-08-27T00:00:00",
+            updated_at="2026-08-27T00:05:00",
+            message_count=1,
+            router_alias="lab",
         ),
         SessionSummary(
             id="other-id",
@@ -111,45 +193,56 @@ async def test_cmd_sessions_lists_summaries(console, mock_session):
             started_at="2026-08-26T00:00:00",
             updated_at="2026-08-26T00:05:00",
             message_count=2,
+            router_alias="lab",
         ),
     ]
-    await slash_commands._cmd_sessions("", mock_session, console)
+    with patch("questionary.select", side_effect=_two_selects("lab", "other-id")):
+        await slash_commands._cmd_history("", mock_session, console)
+    mock_session.resume_session.assert_called_once_with("other-id")
 
 
 @pytest.mark.asyncio
-async def test_cmd_resume_no_store(console, mock_session):
-    mock_session.session_store = None
-    await slash_commands._cmd_resume("1", mock_session, console)
-
-
-@pytest.mark.asyncio
-async def test_cmd_resume_no_arg(console, mock_session):
-    await slash_commands._cmd_resume("", mock_session, console)
-    mock_session.session_store.resolve_id.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_cmd_resume_unresolvable_id(console, mock_session):
-    mock_session.session_store.resolve_id.return_value = None
-    await slash_commands._cmd_resume("nope", mock_session, console)
-    mock_session.resume_session.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_cmd_resume_success(console, mock_session):
-    mock_session.session_store.resolve_id.return_value = "resolved-id"
-    mock_session.resume_session.return_value = 7
-    await slash_commands._cmd_resume("2", mock_session, console)
-    mock_session.resume_session.assert_called_once_with("resolved-id")
-
-
-@pytest.mark.asyncio
-async def test_cmd_resume_not_found_error(console, mock_session):
+async def test_cmd_history_switch_not_found_error(console, mock_session):
     from mika.cli.errors import SessionNotFoundError
+    from mika.memory.sessions import SessionSummary
 
-    mock_session.session_store.resolve_id.return_value = "resolved-id"
+    mock_session.session_store.list_routers_with_sessions.return_value = [_router_group("lab", 1)]
+    mock_session.session_store.list_sessions.return_value = [
+        SessionSummary(
+            id="other-id",
+            title="check firewall",
+            started_at="2026-08-26T00:00:00",
+            updated_at="2026-08-26T00:05:00",
+            message_count=2,
+            router_alias="lab",
+        ),
+    ]
     mock_session.resume_session.side_effect = SessionNotFoundError("no such session")
-    await slash_commands._cmd_resume("2", mock_session, console)
+    with patch("questionary.select", side_effect=_two_selects("lab", "other-id")):
+        await slash_commands._cmd_history("", mock_session, console)
+
+
+@pytest.mark.asyncio
+async def test_cmd_history_router_removed_label(console, mock_session):
+    mock_session.config.routers = {}  # "lab" no longer registered
+    mock_session.session_store.list_routers_with_sessions.return_value = [_router_group("lab", 1)]
+    mock_session.session_store.list_sessions.return_value = []
+    with patch("questionary.select", side_effect=_two_selects("lab", None)) as mock_select:
+        await slash_commands._cmd_history("", mock_session, console)
+    router_call_kwargs = mock_select.call_args_list[0]
+    labels = [c.title for c in router_call_kwargs.kwargs["choices"]]
+    assert any("(router removed)" in label for label in labels)
+
+
+def test_truncate_label_short_text_unchanged():
+    assert slash_commands.truncate_label("membuat vlan 10") == "membuat vlan 10"
+
+
+def test_truncate_label_long_text_truncated_with_ellipsis():
+    long_title = "membuat firewall rule untuk memblokir semua trafik dari luar"
+    result = slash_commands.truncate_label(long_title, max_len=15)
+    assert result == "membuat fire..."
+    assert len(result) == 15
 
 
 @pytest.mark.asyncio
@@ -389,3 +482,111 @@ async def test_cmd_reset(console, mock_session):
     assert len(mock_session.config.routers) == 0
     assert mock_session.router_alias is None
     assert mock_session.provider_name is None
+
+
+def _pick(*values):
+    """Sequential questionary mock: nth call to .ask_async() returns values[n]."""
+    calls = iter(values)
+
+    def _factory(*args, **kwargs):
+        q = AsyncMock()
+        q.ask_async = AsyncMock(return_value=next(calls))
+        return q
+
+    return _factory
+
+
+@pytest.mark.asyncio
+async def test_cmd_rewind_no_history(console, mock_session):
+    mock_session.history = []
+    await slash_commands._cmd_rewind("", mock_session, console)
+    mock_session.rewind_to.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cmd_rewind_no_rewindable_entries(console, mock_session):
+    # History entries with message_id=None (e.g. never persisted) can't be
+    # rewind targets.
+    mock_session.history = [HistoryEntry("user", "hi", message_id=None)]
+    await slash_commands._cmd_rewind("", mock_session, console)
+    mock_session.rewind_to.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cmd_rewind_cancel_at_picker(console, mock_session):
+    mock_session.history = [HistoryEntry("user", "hi", message_id=1)]
+    with patch("questionary.select", side_effect=_pick(None)):
+        await slash_commands._cmd_rewind("", mock_session, console)
+    mock_session.rewind_to.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cmd_rewind_cancel_at_confirm(console, mock_session):
+    mock_session.history = [HistoryEntry("user", "hi", message_id=1)]
+    with (
+        patch("questionary.select", side_effect=_pick(0)),
+        patch("questionary.confirm", side_effect=_pick(False)),
+    ):
+        await slash_commands._cmd_rewind("", mock_session, console)
+    mock_session.rewind_to.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cmd_rewind_success(console, mock_session):
+    from mika.cli.session import RewindResult
+
+    mock_session.history = [HistoryEntry("user", "hi", message_id=1)]
+    mock_session.rewind_to = AsyncMock(
+        return_value=RewindResult(attempted=2, succeeded=2, stopped_early=False, errors=[])
+    )
+    with (
+        patch("questionary.select", side_effect=_pick(0)),
+        patch("questionary.confirm", side_effect=_pick(True)),
+    ):
+        await slash_commands._cmd_rewind("", mock_session, console)
+    mock_session.rewind_to.assert_called_once_with(1)
+
+
+@pytest.mark.asyncio
+async def test_cmd_rewind_nothing_to_undo(console, mock_session):
+    from mika.cli.session import RewindResult
+
+    mock_session.history = [HistoryEntry("user", "hi", message_id=1)]
+    mock_session.rewind_to = AsyncMock(
+        return_value=RewindResult(attempted=0, succeeded=0, stopped_early=False, errors=[])
+    )
+    with (
+        patch("questionary.select", side_effect=_pick(0)),
+        patch("questionary.confirm", side_effect=_pick(True)),
+    ):
+        await slash_commands._cmd_rewind("", mock_session, console)
+
+
+@pytest.mark.asyncio
+async def test_cmd_rewind_stopped_early_reports_errors(console, mock_session):
+    from mika.cli.session import RewindResult
+
+    mock_session.history = [HistoryEntry("user", "hi", message_id=1)]
+    mock_session.rewind_to = AsyncMock(
+        return_value=RewindResult(
+            attempted=2, succeeded=1, stopped_early=True, errors=["router rejected rollback"]
+        )
+    )
+    with (
+        patch("questionary.select", side_effect=_pick(0)),
+        patch("questionary.confirm", side_effect=_pick(True)),
+    ):
+        await slash_commands._cmd_rewind("", mock_session, console)
+
+
+@pytest.mark.asyncio
+async def test_cmd_rewind_raises_rewind_error(console, mock_session):
+    from mika.cli.errors import RewindError
+
+    mock_session.history = [HistoryEntry("user", "hi", message_id=1)]
+    mock_session.rewind_to = AsyncMock(side_effect=RewindError("cross-router range"))
+    with (
+        patch("questionary.select", side_effect=_pick(0)),
+        patch("questionary.confirm", side_effect=_pick(True)),
+    ):
+        await slash_commands._cmd_rewind("", mock_session, console)

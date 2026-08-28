@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-08-27
+
+### Added
+- `/rewind` — roll back the router's actual configuration to match an earlier point in the conversation, like `git checkout` for router config. Undoes each executed plan since that point (most recent first) via the existing rollback mechanism, stopping and reporting clearly if a step fails partway through. Requires explicit confirmation before touching the router.
+- Conversation sessions are now scoped per router: switching to a different router automatically starts a new session, so a session's history never mixes changes from more than one router.
+- `/history` is now a two-step picker — choose a router, then a session under it — instead of a flat list.
+
+### Fixed
+- `start_new_session()` could tag a new session with the previous router instead of the one being switched to, since the switch order meant the new router wasn't recorded yet at the point the session was tagged.
+- `AuditLogger` was still hardcoded to the real home directory with no override, unlike the other memory/session stores, which could pollute a real user's `~/.config/mika/` during testing.
+
 ## [0.1.3] - 2026-08-27
 
 ### Added

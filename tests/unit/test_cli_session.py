@@ -266,6 +266,41 @@ def test_start_new_session_clears_history_and_gets_new_id(session_with_mock_rout
     assert [m.text for m in old_messages] == ["old session message"]
 
 
+def test_start_new_session_default_tags_with_current_router_alias(session_with_mock_router):
+    session = session_with_mock_router
+    session.router_alias = "mock-router"
+
+    session.start_new_session()
+
+    groups = {g.router_alias: g.session_count for g in session.session_store.list_routers_with_sessions()}
+    assert "mock-router" in groups
+
+
+def test_start_new_session_explicit_router_alias_overrides_current(session_with_mock_router):
+    """Regression: callers switching to a *different* router (e.g.
+    /router select) must be able to tag the new session with the *target*
+    router, not whatever session.router_alias still holds (the old router,
+    since connect_router() hasn't run yet at that point)."""
+    session = session_with_mock_router
+    session.router_alias = "old-router"  # simulates state before connect_router() runs
+
+    session.start_new_session(router_alias="new-router")
+
+    groups = {g.router_alias: g.session_count for g in session.session_store.list_routers_with_sessions()}
+    assert "new-router" in groups
+    assert "old-router" not in groups
+
+
+def test_start_new_session_explicit_none_creates_no_router_session(session_with_mock_router):
+    session = session_with_mock_router
+    session.router_alias = "some-router"
+
+    session.start_new_session(router_alias=None)
+
+    groups = {g.router_alias: g.session_count for g in session.session_store.list_routers_with_sessions()}
+    assert None in groups
+
+
 def test_resume_session_loads_past_messages(session_with_mock_router):
     session = session_with_mock_router
     session.add_history("user", "first message")

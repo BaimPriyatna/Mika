@@ -8,7 +8,7 @@ from rich.table import Table
 
 from mika.cli import config as cli_config
 from mika.cli import env_secrets, render, wizard
-from mika.cli.errors import CliError, NoActiveRouterError, SessionNotFoundError
+from mika.cli.errors import CliError, NoActiveRouterError, RewindError, SessionNotFoundError
 from mika.cli.input import build_status_bar
 from mika.cli.session import ChatSession
 from mika.router.discovery import discover
@@ -26,9 +26,8 @@ Available commands:
   /status                     Session summary (router, provider, history)
   /inspect <target>           View read-only data: router, interfaces,
                               addresses, routes, firewall, dhcp, hotspot
-  /history                    Show conversation history for this session
-  /sessions                   List saved conversation sessions
-  /resume <#>                 Resume a saved conversation session
+  /history                    Open a saved session (arrow keys, Enter, Esc)
+  /rewind                     Roll back router config to a past point (arrow keys, Enter, Esc)
   /backup                     Show last backup info
   /clear                      Clear screen & start a new session
   /reset                      Reset all configuration & saved secrets
@@ -95,7 +94,94 @@ async def _cmd_clear(arg: str, session: ChatSession, console: Console) -> None:
     console.print("[dim]Screen and conversation history cleared. Started a new session.[/dim]")
 
 
+_TITLE_MAX_LEN = 40
+
+
+def truncate_label(text: str, max_len: int = _TITLE_MAX_LEN) -> str:
+    """Truncate a label for a picker list, e.g. 'membuat firewall rule' ->
+    'membuat firewall rule for...'. Shared by /history and /rewind so both
+    pickers look and behave the same way."""
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3].rstrip() + "..."
+
+
+_NO_ROUTER_SENTINEL = "__no_router__"
+
+
+def _router_group_label(router_alias: str | None, session: ChatSession, session_count: int) -> str:
+    if router_alias is None:
+        name = "(no router)"
+    elif router_alias in session.config.routers:
+        name = router_alias
+    else:
+        name = f"{router_alias} (router removed)"
+    plural = "session" if session_count == 1 else "sessions"
+    return f"{name}  ·  {session_count} {plural}"
+
+
 async def _cmd_history(arg: str, session: ChatSession, console: Console) -> None:
+    """Two-step picker (arrow keys, Enter to open, Esc to cancel):
+    1. Pick a router (or "(no router)") to browse its sessions.
+    2. Pick a session to open. Selecting a session other than the current
+       one switches to it (equivalent to the old /resume)."""
+    if session.session_store is None:
+        console.print("[yellow]Session storage is not available.[/yellow]")
+        return
+    groups = session.session_store.list_routers_with_sessions()
+    if not groups:
+        console.print("[dim](no saved sessions)[/dim]")
+        return
+
+    router_choices = [
+        questionary.Choice(
+            title=_router_group_label(g.router_alias, session, g.session_count),
+            # questionary.select returns None both on Esc and when a choice's
+            # value is genuinely None, so "(no router)" uses a sentinel
+            # instead of None to keep those two cases distinguishable.
+            value=g.router_alias if g.router_alias is not None else _NO_ROUTER_SENTINEL,
+        )
+        for g in groups
+    ]
+    selected_router_raw = await questionary.select(
+        "Select router:",
+        choices=router_choices,
+        style=wizard._WIZARD_STYLE,
+        qmark="◈",
+    ).ask_async()
+    if selected_router_raw is None:
+        return  # cancelled (Esc)
+    selected_router = None if selected_router_raw == _NO_ROUTER_SENTINEL else selected_router_raw
+
+    summaries = session.session_store.list_sessions(router_alias=selected_router)
+    if not summaries:
+        console.print("[dim](no saved sessions for this router)[/dim]")
+        return
+
+    choices = []
+    for s in summaries:
+        marker = " (current)" if s.id == session.session_id else ""
+        label = f"{truncate_label(s.title)}{marker}  ·  {s.message_count} msgs  ·  {s.updated_at}"
+        choices.append(questionary.Choice(title=label, value=s.id))
+
+    selected = await questionary.select(
+        "Select a session to open:",
+        choices=choices,
+        style=wizard._WIZARD_STYLE,
+        qmark="◈",
+    ).ask_async()
+
+    if selected is None:
+        return  # cancelled (Esc)
+
+    if selected != session.session_id:
+        try:
+            session.resume_session(selected)
+        except SessionNotFoundError as exc:
+            console.print(f"[yellow]{escape(str(exc))}[/yellow]")
+            return
+        console.print("[green]Switched to session.[/green]")
+
     if not session.history:
         console.print("[dim](history is empty)[/dim]")
         return
@@ -105,39 +191,65 @@ async def _cmd_history(arg: str, session: ChatSession, console: Console) -> None
     console.print(table)
 
 
-async def _cmd_sessions(arg: str, session: ChatSession, console: Console) -> None:
-    if session.session_store is None:
-        console.print("[yellow]Session storage is not available.[/yellow]")
+async def _cmd_rewind(arg: str, session: ChatSession, console: Console) -> None:
+    """Pick a point in the current session's conversation (arrow keys,
+    Enter, Esc to cancel) and roll the router config back to match that
+    point, undoing every plan executed after it."""
+    if not session.history:
+        console.print("[dim](nothing to rewind)[/dim]")
         return
-    summaries = session.session_store.list_sessions()
-    if not summaries:
-        console.print("[dim](no saved sessions)[/dim]")
-        return
-    table = _table("Sessions", "#", "Title", "Messages", "Updated")
-    for idx, s in enumerate(summaries, 1):
-        marker = " (current)" if s.id == session.session_id else ""
-        table.add_row(str(idx), escape(s.title) + marker, str(s.message_count), s.updated_at)
-    console.print(table)
-    console.print("[dim]Use /resume <#> to switch to a session.[/dim]")
 
+    choices = [
+        questionary.Choice(
+            title=f"{truncate_label(entry.text)}  ·  {entry.role}",
+            value=idx,
+        )
+        for idx, entry in enumerate(session.history)
+        if entry.message_id is not None
+    ]
+    if not choices:
+        console.print("[dim](nothing to rewind)[/dim]")
+        return
 
-async def _cmd_resume(arg: str, session: ChatSession, console: Console) -> None:
-    if session.session_store is None:
-        console.print("[yellow]Session storage is not available.[/yellow]")
+    selected_idx = await questionary.select(
+        "Rewind router config to this point:",
+        choices=choices,
+        style=wizard._WIZARD_STYLE,
+        qmark="◈",
+    ).ask_async()
+    if selected_idx is None:
+        return  # cancelled (Esc)
+
+    target_message_id = session.history[selected_idx].message_id
+
+    confirmed = await questionary.confirm(
+        "This will roll back the router's actual configuration to match this point. Continue?",
+        default=False,
+        style=wizard._WIZARD_STYLE,
+        qmark="⚠️ ",
+    ).ask_async()
+    if not confirmed:
+        console.print("[dim]Rewind cancelled.[/dim]")
         return
-    if not arg:
-        console.print("[yellow]Usage: /resume <#>  (see /sessions for the list)[/yellow]")
-        return
-    resolved = session.session_store.resolve_id(arg.strip())
-    if resolved is None:
-        console.print(f"[yellow]No session found matching '{escape(arg)}'. Use /sessions to list.[/yellow]")
-        return
+
     try:
-        count = session.resume_session(resolved)
-    except SessionNotFoundError as exc:
+        with status_spinner("Rewinding router configuration..."):
+            result = await session.rewind_to(target_message_id)
+    except RewindError as exc:
         console.print(f"[yellow]{escape(str(exc))}[/yellow]")
         return
-    console.print(f"[green]Resumed session with {count} messages.[/green]")
+
+    if result.attempted == 0:
+        console.print("[dim]Nothing to undo after this point.[/dim]")
+    elif result.stopped_early:
+        console.print(
+            f"[yellow]Rewind stopped after {result.succeeded}/{result.attempted} step(s) — "
+            f"the router may be in a partially rolled-back state. Check /inspect to verify.[/yellow]"
+        )
+        for err in result.errors:
+            console.print(f"[red]  - {escape(err)}[/red]")
+    else:
+        console.print(f"[green]Rewound successfully ({result.succeeded} change(s) undone).[/green]")
 
 
 async def _cmd_model(arg: str, session: ChatSession, console: Console) -> None:
@@ -201,6 +313,8 @@ async def _cmd_router(arg: str, session: ChatSession, console: Console) -> None:
                 await _add_router(session, console)
                 return
             alias = choice
+        if session.router_alias != alias:
+            session.start_new_session(router_alias=alias)
         session.connect_router(alias)
         session.persist_active_selection()
         console.print(f"[green]Active router: {escape(alias)}[/green]")
@@ -300,6 +414,7 @@ async def _add_router(session: ChatSession, console: Console) -> None:
     )
     session.config.routers[alias] = profile
     cli_config.save_config(session.config, session.config_path)
+    session.start_new_session(router_alias=alias)
     session.connect_router(alias)
     session.persist_active_selection()
     console.print(f"[green]◆ Router '{escape(alias)}' added and activated.[/green]")
@@ -382,8 +497,7 @@ _HANDLERS = {
     "/exit": _cmd_exit,
     "/clear": _cmd_clear,
     "/history": _cmd_history,
-    "/sessions": _cmd_sessions,
-    "/resume": _cmd_resume,
+    "/rewind": _cmd_rewind,
     "/model": _cmd_model,
     "/provider": _cmd_provider,
     "/router": _cmd_router,
