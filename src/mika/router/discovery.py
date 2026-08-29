@@ -77,6 +77,10 @@ class InterfaceInfo(BaseModel):
     comment: str | None = None
     mac_address: str | None = None
     mtu: int | None = 1500
+    vlan_id: int | None = Field(default=None, description="VLAN ID, only set when type == 'vlan'")
+    vlan_parent: str | None = Field(
+        default=None, description="Parent interface name, only set when type == 'vlan'"
+    )
 
 
 class IPAddressInfo(BaseModel):
@@ -127,6 +131,33 @@ class FirewallRuleInfo(BaseModel):
     protocol: str | None = None
     dst_port: str | None = None
     connection_state: str | None = None
+
+
+class NatRuleInfo(BaseModel):
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str = Field(description="RouterOS .id")
+    chain: str = Field(description="Chain: srcnat, dstnat, or custom")
+    action: str = Field(description="Action: masquerade, dst-nat, src-nat, etc.")
+    disabled: bool = False
+    comment: str | None = None
+    in_interface: str | None = None
+    out_interface: str | None = None
+    src_address: str | None = None
+    dst_address: str | None = None
+    to_addresses: str | None = None
+
+
+class QueueInfo(BaseModel):
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str = Field(description="RouterOS .id")
+    name: str = Field(description="Queue name")
+    target: str = Field(description="Target address/subnet or interface")
+    max_limit: str | None = None
+    disabled: bool = False
 
 
 class DhcpServerInfo(BaseModel):
@@ -186,6 +217,8 @@ class RouterContext(BaseModel):
     addresses: list[IPAddressInfo] = Field(default_factory=list)
     routes: list[RouteInfo] = Field(default_factory=list)
     firewall_rules: list[FirewallRuleInfo] = Field(default_factory=list)
+    nat_rules: list[NatRuleInfo] = Field(default_factory=list)
+    queues: list[QueueInfo] = Field(default_factory=list)
     dhcp_servers: list[DhcpServerInfo] = Field(default_factory=list)
     dhcp_leases: list[DhcpLeaseInfo] = Field(default_factory=list)
     hotspot_servers: list[HotspotServerInfo] = Field(default_factory=list)
@@ -228,6 +261,29 @@ class RouterContext(BaseModel):
 
     def has_dhcp_on_interface(self, name: str) -> bool:
         return any(srv.interface == name and not srv.disabled for srv in self.dhcp_servers)
+
+    def has_queue_named(self, name: str) -> bool:
+        return any(q.name == name and not q.disabled for q in self.queues)
+
+    def find_duplicate_firewall_rule(
+        self, *, chain: str, action: str, **fields: str | None
+    ) -> FirewallRuleInfo | None:
+        for rule in self.firewall_rules:
+            if rule.disabled or rule.chain != chain or rule.action != action:
+                continue
+            if all(getattr(rule, k, None) == v for k, v in fields.items() if v is not None):
+                return rule
+        return None
+
+    def find_duplicate_nat_rule(
+        self, *, chain: str, action: str, **fields: str | None
+    ) -> NatRuleInfo | None:
+        for rule in self.nat_rules:
+            if rule.disabled or rule.chain != chain or rule.action != action:
+                continue
+            if all(getattr(rule, k, None) == v for k, v in fields.items() if v is not None):
+                return rule
+        return None
 
     def has_hotspot_on_interface(self, name: str) -> bool:
         return any(srv.interface == name and not srv.disabled for srv in self.hotspot_servers)
@@ -277,6 +333,8 @@ async def discover(client: RouterClient) -> RouterContext:
         raw_addrs,
         raw_routes,
         raw_fw,
+        raw_nat,
+        raw_queues,
         raw_dhcp,
         raw_leases,
         raw_hotspot,
@@ -287,6 +345,8 @@ async def discover(client: RouterClient) -> RouterContext:
         client.get_addresses(),
         client.get_routes(),
         client.get_firewall_rules(),
+        client.get_nat_rules(),
+        client.get_queues(),
         client.get_dhcp_servers(),
         client.get_dhcp_leases(),
         client.get_hotspot_servers(),
@@ -313,16 +373,19 @@ async def discover(client: RouterClient) -> RouterContext:
 
     interfaces: list[InterfaceInfo] = []
     for item in raw_ifaces:
+        item_type = str(item.get("type", "ether"))
         interfaces.append(
             InterfaceInfo(
                 id=str(item.get(".id", "")),
                 name=str(item.get("name", "")),
-                type=str(item.get("type", "ether")),
+                type=item_type,
                 running=_parse_bool(item.get("running"), default=True),
                 disabled=_parse_bool(item.get("disabled"), default=False),
                 comment=item.get("comment"),
                 mac_address=item.get("mac-address"),
                 mtu=_parse_int(item.get("mtu"), default=1500),
+                vlan_id=_parse_int(item.get("vlan-id")) if item_type == "vlan" else None,
+                vlan_parent=item.get("interface") if item_type == "vlan" else None,
             )
         )
 
@@ -369,6 +432,35 @@ async def discover(client: RouterClient) -> RouterContext:
                 protocol=item.get("protocol"),
                 dst_port=item.get("dst-port"),
                 connection_state=item.get("connection-state"),
+            )
+        )
+
+    nat_rules: list[NatRuleInfo] = []
+    for item in raw_nat:
+        nat_rules.append(
+            NatRuleInfo(
+                id=str(item.get(".id", "")),
+                chain=str(item.get("chain", "srcnat")),
+                action=str(item.get("action", "masquerade")),
+                disabled=_parse_bool(item.get("disabled"), default=False),
+                comment=item.get("comment"),
+                in_interface=item.get("in-interface"),
+                out_interface=item.get("out-interface"),
+                src_address=item.get("src-address"),
+                dst_address=item.get("dst-address"),
+                to_addresses=item.get("to-addresses"),
+            )
+        )
+
+    queues: list[QueueInfo] = []
+    for item in raw_queues:
+        queues.append(
+            QueueInfo(
+                id=str(item.get(".id", "")),
+                name=str(item.get("name", "")),
+                target=str(item.get("target", "")),
+                max_limit=item.get("max-limit"),
+                disabled=_parse_bool(item.get("disabled"), default=False),
             )
         )
 
@@ -432,6 +524,8 @@ async def discover(client: RouterClient) -> RouterContext:
         addresses=addresses,
         routes=routes,
         firewall_rules=firewall_rules,
+        nat_rules=nat_rules,
+        queues=queues,
         dhcp_servers=dhcp_servers,
         dhcp_leases=dhcp_leases,
         hotspot_servers=hotspot_servers,

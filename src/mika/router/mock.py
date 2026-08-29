@@ -50,6 +50,8 @@ class MockRouterClient:
         "/ip/address": "addresses",
         "/ip/route": "routes",
         "/ip/firewall/filter": "firewall_rules",
+        "/ip/firewall/nat": "nat_rules",
+        "/queue/simple": "queues",
         "/ip/dhcp-server": "dhcp_servers",
         "/ip/dhcp-server/lease": "dhcp_leases",
         "/ip/hotspot": "hotspot_servers",
@@ -86,6 +88,14 @@ class MockRouterClient:
     async def get_firewall_rules(self) -> list[dict]:
         await self._check("get_firewall_rules")
         return copy.deepcopy(self._profile.firewall_rules)
+
+    async def get_nat_rules(self) -> list[dict]:
+        await self._check("get_nat_rules")
+        return copy.deepcopy(self._profile.nat_rules)
+
+    async def get_queues(self) -> list[dict]:
+        await self._check("get_queues")
+        return copy.deepcopy(self._profile.queues)
 
     async def get_dhcp_servers(self) -> list[dict]:
         await self._check("get_dhcp_servers")

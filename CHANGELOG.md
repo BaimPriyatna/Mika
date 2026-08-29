@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-08-29
+
+### Added
+- All 17 CONFIGURATION/MODIFICATION/DESTRUCTIVE intents now have a real planner instead of showing "planner not yet implemented": `create_address`, `create_dhcp`, `create_firewall_rule`, `create_nat_rule`, `create_queue`, `create_vlan` (create_hotspot already existed); `modify_address`, `modify_firewall_rule`, `modify_dhcp`, `modify_hotspot`, `modify_queue`; `delete_address`, `delete_vlan`, `delete_firewall_rule`, `delete_dhcp`, `delete_hotspot`, `delete_queue`.
+- New knowledge documents for the standalone `/interface vlan` feature (`knowledge/routeros/v6/vlan.md`, `v7/vlan.md`), verified via web search rather than guessed from memory.
+- Router discovery extended with NAT rule and simple-queue collections, and VLAN id/parent metadata on interfaces, so the new planners can check for duplicates and resolve resource ids.
+- A shared `resolve_resource()` helper enforces that every modify/delete planner re-resolves a resource's id against freshly-discovered router state rather than trusting a possibly-stale id (RouterOS can recycle `.id` values after deletion).
+
+### Known limitations
+- `modify_dhcp` cannot yet change `pool_start`/`pool_end`/`gateway`, and `modify_hotspot` cannot yet change `rate_limit` -- both live on sub-resources (`/ip/dhcp-server/network`, `/ip/hotspot/user/profile`) that aren't discovered yet. Both fail clearly with an explanation rather than guessing.
+- `delete_dhcp` and `delete_hotspot` only remove the primary resource; the associated IP pool and network/profile entries created alongside it are left in place and flagged in the confirmation prompt.
+
 ## [0.2.2] - 2026-08-29
 
 ### Added

@@ -44,6 +44,8 @@ def mock_router_client():
     client.get_addresses = AsyncMock(return_value=[])
     client.get_routes = AsyncMock(return_value=[])
     client.get_firewall_rules = AsyncMock(return_value=[])
+    client.get_nat_rules = AsyncMock(return_value=[])
+    client.get_queues = AsyncMock(return_value=[])
     client.get_dhcp_servers = AsyncMock(return_value=[])
     client.get_dhcp_leases = AsyncMock(return_value=[])
     client.get_hotspot_servers = AsyncMock(return_value=[])

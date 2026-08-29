@@ -27,10 +27,57 @@ KNOWN_RESOURCE_FIELDS: dict[str, frozenset[str]] = {
     "/ip/hotspot": frozenset(
         {"name", "interface", "address-pool", "profile", "disabled", "comment"}
     ),
+    "/ip/firewall/filter": frozenset(
+        {
+            "chain",
+            "action",
+            "protocol",
+            "src-address",
+            "dst-address",
+            "src-port",
+            "dst-port",
+            "in-interface",
+            "out-interface",
+            "comment",
+            "disabled",
+        }
+    ),
+    "/ip/firewall/nat": frozenset(
+        {
+            "chain",
+            "action",
+            "src-address",
+            "dst-address",
+            "out-interface",
+            "in-interface",
+            "to-addresses",
+            "comment",
+            "disabled",
+        }
+    ),
+    "/queue/simple": frozenset({"name", "target", "max-limit", "comment", "disabled"}),
+    "/interface/vlan": frozenset({"name", "vlan-id", "interface", "comment", "disabled"}),
 }
 
 REFERENCE_FIELDS: frozenset[str] = frozenset({"address-pool", "profile"})
 
 INTENT_KNOWLEDGE_TOPICS: dict[IntentName, tuple[str, ...]] = {
     IntentName.CREATE_HOTSPOT: ("hotspot", "dhcp"),
+    IntentName.CREATE_ADDRESS: ("subnetting",),
+    IntentName.CREATE_DHCP: ("dhcp",),
+    IntentName.CREATE_FIREWALL_RULE: ("firewall",),
+    IntentName.CREATE_NAT_RULE: ("nat",),
+    IntentName.CREATE_QUEUE: ("queue",),
+    IntentName.CREATE_VLAN: ("vlan",),
+    IntentName.MODIFY_ADDRESS: ("subnetting",),
+    IntentName.MODIFY_FIREWALL_RULE: ("firewall",),
+    IntentName.MODIFY_DHCP: ("dhcp",),
+    IntentName.MODIFY_HOTSPOT: ("hotspot",),
+    IntentName.MODIFY_QUEUE: ("queue",),
+    IntentName.DELETE_ADDRESS: ("subnetting",),
+    IntentName.DELETE_VLAN: ("vlan",),
+    IntentName.DELETE_FIREWALL_RULE: ("firewall",),
+    IntentName.DELETE_DHCP: ("dhcp",),
+    IntentName.DELETE_HOTSPOT: ("hotspot",),
+    IntentName.DELETE_QUEUE: ("queue",),
 }

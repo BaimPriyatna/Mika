@@ -26,3 +26,43 @@ class SubnetConflictError(PlannerError):
 
 class NetworkTooSmallError(PlannerError):
     pass
+
+
+class AddressAlreadyExistsError(PlannerError):
+    pass
+
+
+class NoAddressOnInterfaceError(PlannerError):
+    pass
+
+
+class DhcpAlreadyExistsError(PlannerError):
+    pass
+
+
+class InvalidDhcpPoolRangeError(PlannerError):
+    pass
+
+
+class GatewayNotInNetworkError(PlannerError):
+    pass
+
+
+class DuplicateRuleError(PlannerError):
+    pass
+
+
+class QueueAlreadyExistsError(PlannerError):
+    pass
+
+
+class VlanAlreadyExistsError(PlannerError):
+    pass
+
+
+class ResourceNotFoundError(PlannerError):
+    pass
+
+
+class UnsupportedModificationError(PlannerError):
+    pass

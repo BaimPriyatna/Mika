@@ -262,6 +262,12 @@ class BinaryRouterClient:
     async def get_firewall_rules(self) -> list[dict]:
         return await self._call("/ip/firewall/filter")
 
+    async def get_nat_rules(self) -> list[dict]:
+        return await self._call("/ip/firewall/nat")
+
+    async def get_queues(self) -> list[dict]:
+        return await self._call("/queue/simple")
+
     async def get_dhcp_servers(self) -> list[dict]:
         return await self._call("/ip/dhcp-server")
 

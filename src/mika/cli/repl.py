@@ -31,12 +31,46 @@ from mika.executor.executor import execute_plan
 from mika.executor.rollback import create_backup, rollback_from_backup
 from mika.executor.verification import verify_plan
 from mika.planner.errors import PlannerError
+from mika.planner.address import plan_create_address
+from mika.planner.delete_address import plan_delete_address
+from mika.planner.delete_dhcp import plan_delete_dhcp
+from mika.planner.delete_firewall import plan_delete_firewall_rule
+from mika.planner.delete_hotspot import plan_delete_hotspot
+from mika.planner.delete_queue import plan_delete_queue
+from mika.planner.delete_vlan import plan_delete_vlan
+from mika.planner.dhcp import plan_create_dhcp
+from mika.planner.firewall import plan_create_firewall_rule
 from mika.planner.hotspot import plan_create_hotspot
+from mika.planner.modify_address import plan_modify_address
+from mika.planner.modify_dhcp import plan_modify_dhcp
+from mika.planner.modify_firewall import plan_modify_firewall_rule
+from mika.planner.modify_hotspot import plan_modify_hotspot
+from mika.planner.modify_queue import plan_modify_queue
+from mika.planner.nat import plan_create_nat_rule
+from mika.planner.queue import plan_create_queue
+from mika.planner.vlan import plan_create_vlan
 from mika.router.discovery import RouterContext, discover
 from mika.validator.validator import validate
 
 _PLANNERS = {
+    "create_address": plan_create_address,
+    "create_dhcp": plan_create_dhcp,
+    "create_firewall_rule": plan_create_firewall_rule,
     "create_hotspot": plan_create_hotspot,
+    "create_nat_rule": plan_create_nat_rule,
+    "create_queue": plan_create_queue,
+    "create_vlan": plan_create_vlan,
+    "modify_address": plan_modify_address,
+    "modify_dhcp": plan_modify_dhcp,
+    "modify_firewall_rule": plan_modify_firewall_rule,
+    "modify_hotspot": plan_modify_hotspot,
+    "modify_queue": plan_modify_queue,
+    "delete_address": plan_delete_address,
+    "delete_dhcp": plan_delete_dhcp,
+    "delete_firewall_rule": plan_delete_firewall_rule,
+    "delete_hotspot": plan_delete_hotspot,
+    "delete_queue": plan_delete_queue,
+    "delete_vlan": plan_delete_vlan,
 }
 
 

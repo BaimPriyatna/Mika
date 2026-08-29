@@ -79,6 +79,12 @@ class RestRouterClient:
     async def get_firewall_rules(self) -> list[dict]:
         return await self._get_list("/ip/firewall/filter")
 
+    async def get_nat_rules(self) -> list[dict]:
+        return await self._get_list("/ip/firewall/nat")
+
+    async def get_queues(self) -> list[dict]:
+        return await self._get_list("/queue/simple")
+
     async def get_dhcp_servers(self) -> list[dict]:
         return await self._get_list("/ip/dhcp-server")
 
