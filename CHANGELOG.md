@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-08-29
+
+### Added
+- CI: GitHub Actions workflow runs the test suite on every push and pull request to `main`.
+
+### Fixed
+- `memory.db` (`SessionStore`, `BackupStore`, `MemoryStorage`) had no WAL mode or explicit `busy_timeout`, unlike `AuditLogger` which already used WAL. Under the default rollback-journal mode, running two `mika` sessions against the same database (same machine) could raise "database is locked". All three stores now connect through a shared helper that enables WAL mode and a 5s `busy_timeout`.
+- A bug inside any `/slash` command handler crashed the whole REPL with a raw traceback instead of being caught — only `ExitRepl` was handled. Slash commands now recover from unexpected errors the same way natural-language requests already did: print a friendly message and keep the session running.
+
 ## [0.2.1] - 2026-08-29
 
 ### Added

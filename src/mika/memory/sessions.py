@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from mika.memory import db
+
 
 @dataclass
 class SessionSummary:
@@ -48,7 +50,7 @@ class SessionStore:
         self._init_database()
 
     def _init_database(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS sessions (
                     id TEXT PRIMARY KEY,
@@ -77,7 +79,7 @@ class SessionStore:
     def create_session(self, router_alias: str | None = None) -> str:
         session_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             conn.execute(
                 "INSERT INTO sessions (id, title, router_alias, started_at, updated_at) VALUES (?, ?, ?, ?, ?)",
                 (session_id, "", router_alias, now, now),
@@ -89,7 +91,7 @@ class SessionStore:
         """Persist a message and return its row id (used to anchor rewind
         points and plan backups to a precise point in the conversation)."""
         now = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             cursor = conn.execute(
                 "INSERT INTO session_messages (session_id, role, text, created_at) VALUES (?, ?, ?, ?)",
                 (session_id, role, text, now),
@@ -120,7 +122,7 @@ class SessionStore:
         least one saved session, plus a '(no router)' bucket for sessions
         created before any router was ever selected. Ordered by most
         recently active."""
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("""
                 SELECT router_alias, COUNT(*) AS session_count, MAX(updated_at) AS last_active
@@ -152,7 +154,7 @@ class SessionStore:
         query += " GROUP BY s.id ORDER BY s.updated_at DESC LIMIT ?"
         params.append(limit)
 
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(query, params).fetchall()
         return [
@@ -169,7 +171,7 @@ class SessionStore:
 
     def get_messages(self, session_id: str, limit: int | None = None) -> list[SessionMessage]:
         query = "SELECT id, role, text, created_at FROM session_messages WHERE session_id = ? ORDER BY id ASC"
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(query, [session_id]).fetchall()
         messages = [
@@ -184,7 +186,7 @@ class SessionStore:
         """Delete messages after `message_id` in this session (used after a
         successful /rewind so future history stays consistent with the
         rolled-back router config). Returns the number of rows deleted."""
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             cursor = conn.execute(
                 "DELETE FROM session_messages WHERE session_id = ? AND id > ?",
                 (session_id, message_id),
@@ -195,7 +197,7 @@ class SessionStore:
         return cursor.rowcount
 
     def session_exists(self, session_id: str) -> bool:
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             row = conn.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone()
         return row is not None
 
@@ -208,7 +210,7 @@ class SessionStore:
             if 0 <= idx < len(summaries):
                 return summaries[idx].id
             return None
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             rows = conn.execute(
                 "SELECT id FROM sessions WHERE id LIKE ?", (f"{ref}%",)
             ).fetchall()

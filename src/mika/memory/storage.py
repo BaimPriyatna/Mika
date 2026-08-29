@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from mika.memory import db
 from .models import Fact, FactCategory, MemoryEntry
 
 
@@ -21,7 +22,7 @@ class MemoryStorage:
         self._init_database()
 
     def _init_database(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS memory (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,7 +61,7 @@ class MemoryStorage:
             conn.commit()
 
     def add(self, fact: Fact) -> int:
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             cursor = conn.execute(
                 "SELECT id FROM memory WHERE key = ?",
                 (fact.key,)
@@ -113,7 +114,7 @@ class MemoryStorage:
                 return cursor.lastrowid
 
     def get(self, key: str) -> Optional[MemoryEntry]:
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(
                 "SELECT * FROM memory WHERE key = ?",
@@ -147,7 +148,7 @@ class MemoryStorage:
 
         query += " ORDER BY created_at DESC"
 
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(query, params)
             entries = [self._row_to_entry(row) for row in cursor.fetchall()]
@@ -155,7 +156,7 @@ class MemoryStorage:
             return [e for e in entries if not active_only or e.is_valid()]
 
     def delete(self, key: str) -> bool:
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             cursor = conn.execute(
                 "DELETE FROM memory WHERE key = ?",
                 (key,)
@@ -164,7 +165,7 @@ class MemoryStorage:
             return cursor.rowcount > 0
 
     def deactivate(self, key: str) -> bool:
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             cursor = conn.execute("""
                 UPDATE memory 
                 SET active = 0, updated_at = ?
@@ -177,7 +178,7 @@ class MemoryStorage:
             return cursor.rowcount > 0
 
     def record_access(self, key: str) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             conn.execute("""
                 UPDATE memory 
                 SET last_accessed = ?,
@@ -190,7 +191,7 @@ class MemoryStorage:
             conn.commit()
 
     def clear_all(self, router_id: Optional[str] = None) -> int:
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             if router_id:
                 cursor = conn.execute(
                     "DELETE FROM memory WHERE router_id = ?",

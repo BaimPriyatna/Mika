@@ -64,6 +64,9 @@ async def run_repl(session: ChatSession, console: Console | None = None) -> None
                 await dispatch(line, session, console)
             except ExitRepl:
                 break
+            except Exception as exc:
+                console.print(f"[red]Unexpected error occurred: {escape(str(exc) or type(exc).__name__)}[/red]")
+                console.print("[dim]Session continues. If this persists, please report it as a bug.[/dim]")
             continue
 
         try:

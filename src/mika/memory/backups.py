@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from mika.executor.rollback import PlanBackup
+from mika.memory import db
 
 
 @dataclass
@@ -36,7 +37,7 @@ class BackupStore:
         self._init_database()
 
     def _init_database(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS plan_backups (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,7 +64,7 @@ class BackupStore:
         backup: PlanBackup,
     ) -> None:
         now = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             conn.execute(
                 """
                 INSERT INTO plan_backups
@@ -77,7 +78,7 @@ class BackupStore:
     def list_backups_after(self, session_id: str, message_id: int) -> list[StoredBackup]:
         """Backups still available to undo (not yet rolled back), created
         after `message_id`, oldest first."""
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 """
@@ -106,7 +107,7 @@ class BackupStore:
             return
         now = datetime.now(timezone.utc).isoformat()
         placeholders = ",".join("?" for _ in backup_ids)
-        with sqlite3.connect(self.db_path) as conn:
+        with db.connect(self.db_path) as conn:
             conn.execute(
                 f"UPDATE plan_backups SET rolled_back_at = ? WHERE id IN ({placeholders})",
                 (now, *backup_ids),
