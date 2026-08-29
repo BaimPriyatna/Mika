@@ -20,6 +20,7 @@ class SafetyLevel(str, Enum):
 
 class IntentName(str, Enum):
     ADVISE = "advise"
+    TROUBLESHOOT = "troubleshoot"
 
     INSPECT_ROUTER = "inspect_router"
     INSPECT_INTERFACES = "inspect_interfaces"
@@ -55,6 +56,7 @@ class IntentName(str, Enum):
 INTENT_CATEGORY: dict[IntentName, IntentCategory] = {
     **{name: IntentCategory.READ for name in (
         IntentName.ADVISE,
+        IntentName.TROUBLESHOOT,
         IntentName.INSPECT_ROUTER,
         IntentName.INSPECT_INTERFACES,
         IntentName.INSPECT_IP_ADDRESSES,

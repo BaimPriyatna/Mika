@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-08-29
+
+### Added
+- `/troubleshoot <description>` — diagnose a reported problem and suggest fixes, backed by the existing `troubleshoot` module. Natural-language requests describing a symptom (e.g. "internet is down") now also route to diagnosis instead of being misread as a configuration request. After diagnosis, you can apply the recommended fixes through the normal plan/confirm/execute pipeline.
+
+### Fixed
+- API keys and router passwords (`.env`) were stored relative to the current working directory instead of a fixed location, so the globally-installed `mika` command could silently read or write a different `.env` depending on where it was launched from, losing credentials. Now fixed at `~/.config/mika/.env`, consistent with `config.toml`; an existing `.env` in the old location is migrated automatically on next use.
+- Removed the stale `.env.example` and its README setup step: `/provider` and `/router add` fully automate `.env` now, and the template's variables no longer matched what the app actually reads.
+
 ## [0.2.0] - 2026-08-27
 
 ### Added

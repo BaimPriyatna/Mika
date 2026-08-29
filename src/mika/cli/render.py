@@ -9,6 +9,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from mika.router.discovery import RouterContext
+from mika.troubleshoot.models import DiagnosisResult, HypothesisLikelihood
 
 INSPECT_TARGETS = (
     "router",
@@ -37,6 +38,34 @@ def render_advice(
         panel_body += f"\n\n[dim]Tip: You can say '[bold white]{escape(suggested_action)}[/bold white]' to proceed.[/dim]"
 
     console.print(Panel(panel_body, border_style="#7c3aed", padding=(0, 1), expand=False))
+
+
+_LIKELIHOOD_STYLE = {
+    HypothesisLikelihood.VERY_LIKELY: "bold red",
+    HypothesisLikelihood.LIKELY: "yellow",
+    HypothesisLikelihood.POSSIBLE: "cyan",
+    HypothesisLikelihood.UNLIKELY: "dim",
+}
+
+
+def render_diagnosis(console: Console, diagnosis: DiagnosisResult) -> None:
+    console.print()
+    body = f"[bold #c084fc]◆ Diagnosis:[/bold #c084fc] {escape(diagnosis.problem_description)}"
+
+    if diagnosis.hypotheses:
+        body += "\n\n[bold cyan]Possible Causes:[/bold cyan]"
+        for h in diagnosis.hypotheses:
+            style = _LIKELIHOOD_STYLE.get(h.likelihood, "white")
+            body += f"\n  [{style}]● {escape(h.description)} ({h.likelihood.value})[/{style}]"
+            for ev in h.evidence:
+                body += f"\n      [dim]- {escape(ev)}[/dim]"
+
+    if diagnosis.recommended_fixes:
+        body += "\n\n[bold green]Recommended Fixes:[/bold green]"
+        for idx, fix in enumerate(diagnosis.recommended_fixes, 1):
+            body += f"\n  [bold white]{idx}.[/bold white] {escape(fix)}"
+
+    console.print(Panel(body, border_style="#7c3aed", padding=(0, 1), expand=False))
 
 
 def render_inspect(console: Console, target: str, ctx: RouterContext) -> None:

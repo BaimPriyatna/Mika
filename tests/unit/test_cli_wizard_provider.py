@@ -28,7 +28,6 @@ class TestRunProviderWizard:
             patch("mika.cli.wizard.questionary.select") as mock_select,
             patch("mika.cli.wizard.questionary.password") as mock_password,
             patch("mika.cli.wizard.env_secrets.set_provider_secret") as mock_set_secret,
-            patch("mika.cli.wizard.env_secrets.ensure_gitignored", return_value=False),
         ):
             mock_select.side_effect = [_asked("gemini")]
             mock_password.return_value = _asked("real-key")
@@ -49,7 +48,6 @@ class TestRunProviderWizard:
             patch("mika.cli.wizard.questionary.select") as mock_select,
             patch("mika.cli.wizard.questionary.password") as mock_password,
             patch("mika.cli.wizard.env_secrets.set_provider_secret"),
-            patch("mika.cli.wizard.env_secrets.ensure_gitignored", return_value=False),
         ):
             mock_select.side_effect = [_asked("gemini")]
             mock_password.return_value = _asked("real-key")
@@ -70,7 +68,6 @@ class TestRunProviderWizard:
             patch("mika.cli.wizard.questionary.password") as mock_password,
             patch("mika.cli.wizard.questionary.confirm") as mock_confirm,
             patch("mika.cli.wizard.env_secrets.set_provider_secret"),
-            patch("mika.cli.wizard.env_secrets.ensure_gitignored", return_value=False),
         ):
             mock_select.side_effect = [_asked("gemini")]
             mock_password.side_effect = [_asked("wrong-key"), _asked("right-key")]
@@ -108,7 +105,6 @@ class TestRunProviderWizard:
             patch("mika.cli.wizard.questionary.confirm") as mock_confirm,
             patch("mika.cli.wizard.questionary.text") as mock_text,
             patch("mika.cli.wizard.env_secrets.set_provider_secret"),
-            patch("mika.cli.wizard.env_secrets.ensure_gitignored", return_value=False),
         ):
             mock_select.side_effect = [_asked("gemini")]
             mock_password.return_value = _asked("real-key")
@@ -154,7 +150,6 @@ class TestSelectModelAddFlow:
             patch("mika.cli.wizard.questionary.select") as mock_select,
             patch("mika.cli.wizard.questionary.password") as mock_password,
             patch("mika.cli.wizard.env_secrets.set_provider_secret"),
-            patch("mika.cli.wizard.env_secrets.ensure_gitignored", return_value=False),
         ):
             mock_select.side_effect = [_asked("__add__"), _asked("gemini")]
             mock_password.return_value = _asked("real-key")
@@ -176,7 +171,6 @@ class TestSelectModelAddFlow:
             patch("mika.cli.wizard.questionary.select") as mock_select,
             patch("mika.cli.wizard.questionary.password") as mock_password,
             patch("mika.cli.wizard.env_secrets.set_provider_secret"),
-            patch("mika.cli.wizard.env_secrets.ensure_gitignored", return_value=False),
         ):
             mock_select.side_effect = [_asked("__add__"), _asked("gemini"), _asked("model-b")]
             mock_password.return_value = _asked("real-key")
@@ -257,7 +251,6 @@ class TestExistingApiKeyFlow:
             patch("mika.cli.wizard.questionary.password") as mock_password,
             patch("mika.cli.wizard.env_secrets.get_provider_secret", return_value="old-key"),
             patch("mika.cli.wizard.env_secrets.set_provider_secret") as mock_set_secret,
-            patch("mika.cli.wizard.env_secrets.ensure_gitignored", return_value=False),
         ):
             mock_select.side_effect = [_asked("gemini"), _asked("replace")]
             mock_password.return_value = _asked("new-key")

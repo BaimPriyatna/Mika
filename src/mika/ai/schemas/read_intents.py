@@ -16,6 +16,11 @@ class AdviseIntent(IntentBase):
     suggested_action: str | None = Field(default=None, description="Optional recommended action or command.")
 
 
+class TroubleshootIntent(IntentBase):
+    intent: Literal[IntentName.TROUBLESHOOT] = IntentName.TROUBLESHOOT
+    problem_description: str = Field(description="The user-reported problem or symptom to diagnose.")
+
+
 class InspectRouterIntent(IntentBase):
     intent: Literal[IntentName.INSPECT_ROUTER] = IntentName.INSPECT_ROUTER
 
@@ -55,6 +60,7 @@ class InspectHotspotIntent(IntentBase):
 
 READ_INTENTS = (
     AdviseIntent,
+    TroubleshootIntent,
     InspectRouterIntent,
     InspectInterfacesIntent,
     InspectIpAddressesIntent,

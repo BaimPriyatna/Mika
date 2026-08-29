@@ -26,6 +26,7 @@ Available commands:
   /status                     Session summary (router, provider, history)
   /inspect <target>           View read-only data: router, interfaces,
                               addresses, routes, firewall, dhcp, hotspot
+  /troubleshoot <problem>     Diagnose a problem and suggest fixes
   /history                    Open a saved session (arrow keys, Enter, Esc)
   /rewind                     Roll back router config to a past point (arrow keys, Enter, Esc)
   /backup                     Show last backup info
@@ -433,6 +434,19 @@ async def _cmd_inspect(arg: str, session: ChatSession, console: Console) -> None
     render.render_inspect(console, target, ctx)
 
 
+async def _cmd_troubleshoot(arg: str, session: ChatSession, console: Console) -> None:
+    if not arg:
+        console.print("[yellow]Usage: /troubleshoot <description of the problem>[/yellow]")
+        return
+    from mika.cli.troubleshoot_ui import run_troubleshoot
+
+    fix_request = await run_troubleshoot(arg, session, console)
+    if fix_request:
+        from mika.cli.repl import _handle_chat_turn
+
+        await _handle_chat_turn(fix_request, session, console)
+
+
 async def _cmd_status(arg: str, session: ChatSession, console: Console) -> None:
     console.print(f"[dim]{escape(build_status_bar(session))}[/dim]")
     table = _table("Session Status", "Field", "Value", show_header=False)
@@ -502,6 +516,7 @@ _HANDLERS = {
     "/provider": _cmd_provider,
     "/router": _cmd_router,
     "/inspect": _cmd_inspect,
+    "/troubleshoot": _cmd_troubleshoot,
     "/status": _cmd_status,
     "/backup": _cmd_backup,
     "/reset": _cmd_reset,

@@ -270,8 +270,6 @@ async def _select_fetched_model(models: list[str]) -> str:
 def _persist_provider_secret(provider: str, api_key: str) -> None:
     try:
         env_secrets.set_provider_secret(provider, api_key)
-        if env_secrets.ensure_gitignored():
-            console.print("[dim]Added '.env' to .gitignore.[/dim]")
     except env_secrets.EnvFileError as exc:
         console.print(f"[yellow]Warning:[/yellow] {exc}")
         console.print(
@@ -480,8 +478,6 @@ async def run_router_wizard(
     if password:
         try:
             env_secrets.set_router_secret(alias, password)
-            if env_secrets.ensure_gitignored():
-                console.print("[dim]Added '.env' to .gitignore.[/dim]")
         except env_secrets.EnvFileError as exc:
             console.print(f"[yellow]Warning:[/yellow] {exc}")
 

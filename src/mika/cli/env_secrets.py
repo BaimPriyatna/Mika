@@ -10,6 +10,7 @@ from dotenv import dotenv_values, set_key, unset_key
 from mika.cli.errors import CliError
 
 _ENV_FILENAME = ".env"
+_CONFIG_DIR = Path.home() / ".config" / "mika"
 
 
 class EnvFileError(CliError):
@@ -17,7 +18,21 @@ class EnvFileError(CliError):
 
 
 def env_path() -> Path:
-    return Path.cwd() / _ENV_FILENAME
+    return _CONFIG_DIR / _ENV_FILENAME
+
+
+def _migrate_legacy_env(path: Path) -> None:
+    """One-time migration: mika used to store secrets in CWD/.env. Move it
+    to the fixed ~/.config/mika/.env location if found and not yet migrated."""
+    legacy = Path.cwd() / _ENV_FILENAME
+    if path.exists() or not legacy.exists() or legacy.resolve() == path.resolve():
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        legacy.replace(path)
+        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        pass
 
 
 def _sanitize(name: str) -> str:
@@ -35,8 +50,10 @@ def _router_var(alias: str) -> str:
 
 def ensure_env_file() -> Path:
     path = env_path()
+    _migrate_legacy_env(path)
     if not path.exists():
         try:
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.touch(mode=0o600)
         except OSError as exc:
             raise EnvFileError(f"Could not create {path}: {exc}") from exc
@@ -48,28 +65,9 @@ def ensure_env_file() -> Path:
     return path
 
 
-def ensure_gitignored() -> bool:
-    gitignore = Path.cwd() / ".gitignore"
-    if not gitignore.exists():
-        return False
-    try:
-        content = gitignore.read_text()
-    except OSError:
-        return False
-    if any(line.strip() in (".env", "/.env", ".env*") for line in content.splitlines()):
-        return False
-    try:
-        with gitignore.open("a") as f:
-            if content and not content.endswith("\n"):
-                f.write("\n")
-            f.write(".env\n")
-        return True
-    except OSError:
-        return False
-
-
 def _read(var_name: str) -> str | None:
     path = env_path()
+    _migrate_legacy_env(path)
     if not path.exists():
         return None
     try:

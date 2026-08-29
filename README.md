@@ -74,11 +74,9 @@ cd mika
 # Create a virtual environment and install dependencies
 uv venv
 uv pip install -e ".[dev]"
-
-# Copy and fill in your environment variables
-cp .env.example .env
-nano .env
 ```
+
+API keys and router passwords are set up interactively later via `/provider` and `/router add` — they're stored at `~/.config/mika/.env`, not in the project directory. There's nothing to copy or edit by hand before you start.
 
 If you'd rather use plain pip:
 
@@ -141,7 +139,7 @@ Certificate handling:
 Connected via Binary API (SSL, self-signed). Router profile saved.
 ```
 
-Everything sensitive — the API keys and router credentials from this whole flow — is stored in a local `.env` file at the project root, never in plaintext config, never synced anywhere.
+Everything sensitive — the API keys and router credentials from this whole flow — is stored in a local `.env` file at `~/.config/mika/.env`, never in plaintext config, never synced anywhere.
 
 From then on, you're just talking to it — the underlying backend is invisible to how you interact with Mika:
 
@@ -324,39 +322,12 @@ mika/
 
 ## Configuration
 
-Mika is configured through a `.env` file at the project root:
+Mika is configured through two files, both created and managed for you automatically:
 
-```bash
-# Application
-APP_ENV=development
-LOG_LEVEL=INFO
+- `~/.config/mika/config.toml` — non-sensitive settings: last-used model, provider, router profiles (host, username, backend, port, TLS). Set up via the `/provider` and `/router add` wizards; you rarely need to touch it by hand.
+- `~/.config/mika/.env` — sensitive secrets only: `MIKA_PROVIDER_<NAME>_API_KEY` and `MIKA_ROUTER_<ALIAS>_PASSWORD`. Written by `/provider` and `/router add`; the file is created with owner-only (`0600`) permissions. There's no template to copy — the wizards write it for you.
 
-# AI Provider
-AI_PROVIDER=gemini
-GEMINI_API_KEY=your_api_key_here
-GEMINI_MODEL=gemini-1.5-flash
-
-# Alternative providers
-OPENAI_API_KEY=your_openai_key
-OPENAI_MODEL=gpt-4
-
-# MikroTik Router
-MIKROTIK_HOST=192.168.88.1
-MIKROTIK_USERNAME=admin
-MIKROTIK_PASSWORD=your_password
-MIKROTIK_API_MODE=rest        # "rest" (v7+) or "binary" (v6 & v7)
-MIKROTIK_VERIFY_TLS=true
-
-# Binary API only — ignored when MIKROTIK_API_MODE=rest
-MIKROTIK_API_PORT=8729                        # 8728 plaintext, 8729 SSL
-MIKROTIK_API_SSL=true
-MIKROTIK_API_SSL_CERT=                        # path to a .crt/.pem, blank = trust self-signed
-
-# Database
-DATABASE_URL=sqlite:///./data/app.db
-```
-
-Persistent, non-sensitive settings — like your last-used model, provider, and router backend — live in `~/.config/mika/config.toml` and are picked up automatically the next time you launch. Everything under **Binary API only** above is set for you automatically if you go through the `/router add` wizard rather than editing `.env` by hand.
+REST vs Binary API, TLS verification, and Binary API port/SSL settings are all picked automatically by the `/router add` wizard based on what your router exposes — you don't need to set them manually.
 
 ---
 

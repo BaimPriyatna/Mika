@@ -6,13 +6,20 @@ from mika.cli import env_secrets
 
 
 @pytest.fixture(autouse=True)
-def _isolated_cwd(tmp_path, monkeypatch):
+def _isolated_env(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(env_secrets, "_CONFIG_DIR", tmp_path / ".config" / "mika")
     yield tmp_path
 
 
-def test_env_path_is_cwd_dotenv(tmp_path):
-    assert env_secrets.env_path() == tmp_path / ".env"
+def test_env_path_is_fixed_config_dir(tmp_path):
+    assert env_secrets.env_path() == tmp_path / ".config" / "mika" / ".env"
+
+
+def test_env_path_ignores_cwd(tmp_path, monkeypatch):
+    (tmp_path / "other").mkdir()
+    monkeypatch.chdir(tmp_path / "other")
+    assert env_secrets.env_path() == tmp_path / ".config" / "mika" / ".env"
 
 
 def test_get_secret_returns_none_when_env_file_absent():
@@ -44,7 +51,7 @@ def test_alias_with_special_characters_is_sanitized():
 
 def test_set_creates_env_file_with_owner_only_permissions(tmp_path):
     env_secrets.set_provider_secret("gemini", "sk-real-key")
-    path = tmp_path / ".env"
+    path = tmp_path / ".config" / "mika" / ".env"
     assert path.exists()
     mode = path.stat().st_mode & 0o777
     assert mode == 0o600
@@ -75,26 +82,17 @@ def test_multiple_secrets_coexist_in_same_env_file():
     assert env_secrets.get_router_secret("kantor") == "kantor-password"
 
 
-class TestEnsureGitignored:
-    def test_no_gitignore_present_returns_false(self):
-        assert env_secrets.ensure_gitignored() is False
+class TestLegacyEnvMigration:
+    def test_migrates_legacy_cwd_env_to_config_dir(self, tmp_path):
+        legacy = tmp_path / ".env"
+        legacy.write_text("MIKA_PROVIDER_GEMINI_API_KEY=old-key\n")
+        assert env_secrets.get_provider_secret("gemini") == "old-key"
+        assert not legacy.exists()
+        assert env_secrets.env_path().exists()
 
-    def test_appends_env_when_gitignore_exists_and_lacks_it(self, tmp_path):
-        (tmp_path / ".gitignore").write_text("__pycache__/\n*.pyc\n")
-        added = env_secrets.ensure_gitignored()
-        assert added is True
-        content = (tmp_path / ".gitignore").read_text()
-        assert ".env" in content.splitlines()
-
-    def test_does_not_duplicate_when_already_ignored(self, tmp_path):
-        (tmp_path / ".gitignore").write_text("__pycache__/\n.env\n")
-        added = env_secrets.ensure_gitignored()
-        assert added is False
-        content = (tmp_path / ".gitignore").read_text()
-        assert content.count(".env") == 1
-
-    def test_handles_gitignore_with_no_trailing_newline(self, tmp_path):
-        (tmp_path / ".gitignore").write_text("__pycache__/")
-        env_secrets.ensure_gitignored()
-        content = (tmp_path / ".gitignore").read_text()
-        assert "__pycache__/\n.env\n" in content
+    def test_does_not_migrate_when_target_already_exists(self, tmp_path):
+        env_secrets.set_provider_secret("gemini", "current-key")
+        legacy = tmp_path / ".env"
+        legacy.write_text("MIKA_PROVIDER_GEMINI_API_KEY=legacy-key\n")
+        assert env_secrets.get_provider_secret("gemini") == "current-key"
+        assert legacy.exists()

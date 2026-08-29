@@ -151,6 +151,15 @@ async def _handle_chat_turn(request: str, session: ChatSession, console: Console
             session.add_history("assistant", message)
             return
 
+        if intent.intent.value == "troubleshoot":
+            from mika.cli.troubleshoot_ui import run_troubleshoot
+
+            fix_request = await run_troubleshoot(intent.problem_description, session, console)
+            session.add_history("assistant", "(diagnosis shown)")
+            if fix_request:
+                await _handle_chat_turn(fix_request, session, console)
+            return
+
         target = render.INTENT_TO_TARGET.get(intent.intent.value)
         if target is None:
             console.print(f"[yellow]Read intent '{escape(intent.intent.value)}' does not have a matching view.[/yellow]")
