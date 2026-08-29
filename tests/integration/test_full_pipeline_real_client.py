@@ -114,3 +114,48 @@ async def test_delete_queue_full_pipeline_with_backup_and_rollback():
     ctx_after_rollback = await discover(client)
     assert len(ctx_after_rollback.queues) == 1
     assert ctx_after_rollback.queues[0].name == "q1"
+
+
+# -- router-state staleness detection --------------------------------------
+
+
+async def test_execution_refused_when_router_state_changed_since_plan():
+    from mika.executor.errors import StaleConfirmationError
+
+    client = MockRouterClient(hex_profile())
+    ctx = await discover(client)
+
+    intent = CreateAddressIntent(
+        confidence=0.9, requires_confirmation=True, interface="ether2", address="172.16.5.1/24"
+    )
+    plan = plan_create_address(intent, ctx)
+    validated = validate(plan, ctx, _retriever()).plan
+
+    # Simulate someone else changing the router after the plan was built
+    # and confirmed, but before execution actually runs.
+    client._profile.addresses.append(
+        {".id": "*99", "address": "10.99.99.1/24", "network": "10.99.99.0", "interface": "ether5"}
+    )
+
+    conf = ConfirmationState(plan_id=validated.plan_id, status=ConfirmationStatus.CONFIRMED)
+    try:
+        await Executor(client).execute(validated, conf)
+        assert False, "expected StaleConfirmationError"
+    except StaleConfirmationError:
+        pass
+
+
+async def test_execution_proceeds_when_router_state_unchanged():
+    client = MockRouterClient(hex_profile())
+    ctx = await discover(client)
+
+    intent = CreateAddressIntent(
+        confidence=0.9, requires_confirmation=True, interface="ether2", address="172.16.5.1/24"
+    )
+    plan = plan_create_address(intent, ctx)
+    validated = validate(plan, ctx, _retriever()).plan
+
+    # No changes made to the router between validation and execution.
+    conf = ConfirmationState(plan_id=validated.plan_id, status=ConfirmationStatus.CONFIRMED)
+    result = await Executor(client).execute(validated, conf)
+    assert result.success is True

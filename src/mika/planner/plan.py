@@ -27,8 +27,11 @@ def compute_router_fingerprint(router_context: "RouterContext") -> str:
         router_context.routeros_version,
         *sorted(f"{i.name}:{i.disabled}" for i in router_context.interfaces),
         *sorted(a.address for a in router_context.addresses),
-        *sorted(d.name for d in router_context.dhcp_servers),
-        *sorted(h.name for h in router_context.hotspot_servers),
+        *sorted(f"{d.name}:{d.disabled}" for d in router_context.dhcp_servers),
+        *sorted(f"{h.name}:{h.disabled}" for h in router_context.hotspot_servers),
+        *sorted(f"{r.chain}:{r.action}:{r.disabled}:{r.id}" for r in router_context.firewall_rules),
+        *sorted(f"{r.chain}:{r.action}:{r.disabled}:{r.id}" for r in router_context.nat_rules),
+        *sorted(f"{q.name}:{q.target}:{q.disabled}" for q in router_context.queues),
     ]
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
 

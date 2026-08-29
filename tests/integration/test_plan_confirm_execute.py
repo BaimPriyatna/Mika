@@ -17,6 +17,21 @@ from mika.planner.plan import OperationType, Plan, PlanStatus, PlanStep
 from mika.router.client import RouterClient
 
 
+@pytest.fixture(autouse=True)
+def _stub_fingerprint_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests exercise the plan/confirm/execute workflow mechanics,
+    not the router-state-staleness check, so make it always match the
+    plan's own fingerprint. The real staleness-detection behavior
+    (re-discover and compare) is covered separately in
+    tests/integration/test_full_pipeline_real_client.py against the real
+    MockRouterClient, where a genuine mismatch can be constructed."""
+
+    async def _fake_compute(self, plan):
+        return plan.router_state_fingerprint
+
+    monkeypatch.setattr(Executor, "_compute_state_fingerprint", _fake_compute)
+
+
 def _make_ask_mock(value):
     m = Mock()
     m.ask.return_value = value

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from mika.audit.models import ExecutionResult
 from mika.executor.errors import ExecutionDenied, ExecutionError, StaleConfirmationError
-from mika.planner.plan import OperationType, PlanStatus
+from mika.planner.plan import OperationType, PlanStatus, compute_router_fingerprint
 
 if TYPE_CHECKING:
     from mika.planner.plan import Plan
@@ -147,7 +147,10 @@ class Executor:
             ) from e
 
     async def _compute_state_fingerprint(self, plan: Plan) -> str:
-        return plan.router_state_fingerprint
+        from mika.router.discovery import discover
+
+        fresh_context = await discover(self._client)
+        return compute_router_fingerprint(fresh_context)
 
     def _generate_success_summary(self, plan: Plan, applied_steps: list[str]) -> str:
         intent_name = plan.intent.intent.value.replace("_", " ").title()

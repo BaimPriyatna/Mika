@@ -120,6 +120,21 @@ def mock_router_client() -> AsyncMock:
     return client
 
 
+@pytest.fixture(autouse=True)
+def _stub_fingerprint_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests exercise authorization/execution mechanics, not the
+    router-state-staleness check, so make it always match the plan's own
+    fingerprint. The real staleness-detection behavior (re-discover and
+    compare) is covered separately in
+    tests/integration/test_full_pipeline_real_client.py against the real
+    MockRouterClient, where a genuine mismatch can be constructed."""
+
+    async def _fake_compute(self, plan):
+        return plan.router_state_fingerprint
+
+    monkeypatch.setattr(Executor, "_compute_state_fingerprint", _fake_compute)
+
+
 @pytest.mark.asyncio
 async def test_executor_rejects_unvalidated_plan(
     unvalidated_plan: Plan,

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-08-29
+
+### Fixed
+- `_compute_state_fingerprint()` was a dead-code stub that returned the plan's own fingerprint, which the caller then compared against itself -- always true, so the "refuse execution if router state changed since confirmation" safety check never actually verified anything. Now genuinely re-discovers the router and computes a fresh fingerprint from live state before comparing.
+- `compute_router_fingerprint()` extended to cover firewall rules, NAT rules, and queues (previously only interfaces, addresses, DHCP, and hotspot), and to include each resource's `disabled` state -- a human manually enabling/disabling a rule or server (e.g. via WinBox) between plan creation and execution now correctly registers as drift and blocks a now-stale plan from executing. The fingerprint deliberately still excludes anything that changes on its own from normal traffic (byte/packet counters, DHCP leases, active hotspot sessions, interface link/running state) -- only fields that reflect actual configuration a human changed.
+
 ## [0.2.4] - 2026-08-29
 
 ### Fixed
