@@ -228,6 +228,9 @@ class RollbackEngine:
         resource_readers = {
             "/ip/address": self._client.get_addresses,
             "/ip/firewall/filter": self._client.get_firewall_rules,
+            "/ip/firewall/nat": self._client.get_nat_rules,
+            "/queue/simple": self._client.get_queues,
+            "/interface/vlan": self._client.get_interfaces,
             "/ip/dhcp-server": self._client.get_dhcp_servers,
             "/ip/hotspot": self._client.get_hotspot_servers,
             "/ip/hotspot/user": self._client.get_hotspot_users,

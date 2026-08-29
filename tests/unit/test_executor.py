@@ -111,10 +111,12 @@ def cancelled_confirmation(validated_plan: Plan) -> ConfirmationState:
 
 @pytest.fixture
 def mock_router_client() -> AsyncMock:
-    client = AsyncMock()
-    client.add = AsyncMock()
-    client.update = AsyncMock()
-    client.delete = AsyncMock()
+    from mika.router.client import RouterClient
+
+    client = AsyncMock(spec=RouterClient)
+    client.create_resource = AsyncMock()
+    client.update_resource = AsyncMock()
+    client.delete_resource = AsyncMock()
     return client
 
 
@@ -132,9 +134,9 @@ async def test_executor_rejects_unvalidated_plan(
     assert "not validated" in str(exc_info.value).lower()
     assert "PLANNED" in str(exc_info.value)
     
-    mock_router_client.add.assert_not_called()
-    mock_router_client.update.assert_not_called()
-    mock_router_client.delete.assert_not_called()
+    mock_router_client.create_resource.assert_not_called()
+    mock_router_client.update_resource.assert_not_called()
+    mock_router_client.delete_resource.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -150,7 +152,7 @@ async def test_executor_rejects_unconfirmed_plan(
 
     assert "confirmation required" in str(exc_info.value).lower()
     
-    mock_router_client.add.assert_not_called()
+    mock_router_client.create_resource.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -166,7 +168,7 @@ async def test_executor_rejects_cancelled_confirmation(
 
     assert "confirmation required" in str(exc_info.value).lower()
     
-    mock_router_client.add.assert_not_called()
+    mock_router_client.create_resource.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -185,14 +187,14 @@ async def test_executor_applies_validated_confirmed_plan(
     assert "Create Hotspot" in result.summary or "hotspot" in result.summary.lower()
     assert result.error is None
 
-    assert mock_router_client.add.call_count == 2
+    assert mock_router_client.create_resource.call_count == 2
     
-    call1 = mock_router_client.add.call_args_list[0]
+    call1 = mock_router_client.create_resource.call_args_list[0]
     assert call1[0][0] == "/ip/address"
     assert call1[0][1]["address"] == "192.168.20.1/24"
     assert call1[0][1]["interface"] == "ether3"
     
-    call2 = mock_router_client.add.call_args_list[1]
+    call2 = mock_router_client.create_resource.call_args_list[1]
     assert call2[0][0] == "/ip/pool"
     assert call2[0][1]["name"] == "hotspot-pool"
 
@@ -246,7 +248,7 @@ async def test_executor_applies_update_operation(
     result = await executor.execute(plan, confirmation)
 
     assert result.success is True
-    mock_router_client.update.assert_called_once_with(
+    mock_router_client.update_resource.assert_called_once_with(
         "/ip/hotspot/profile",
         "*1A",
         {"dns-name": "newlab.local"},
@@ -288,7 +290,7 @@ async def test_executor_applies_delete_operation(
     result = await executor.execute(plan, confirmation)
 
     assert result.success is True
-    mock_router_client.delete.assert_called_once_with("/ip/hotspot", "*2B")
+    mock_router_client.delete_resource.assert_called_once_with("/ip/hotspot", "*2B")
 
 
 @pytest.mark.asyncio
@@ -297,7 +299,7 @@ async def test_executor_handles_router_error_gracefully(
     confirmed_state: ConfirmationState,
     mock_router_client: AsyncMock,
 ) -> None:
-    mock_router_client.add.side_effect = [
+    mock_router_client.create_resource.side_effect = [
         None,
         Exception("Router API error: interface not found"),
     ]
@@ -477,6 +479,6 @@ async def test_executor_handles_empty_plan(
     assert result.commands_applied == 0
     assert "0 steps" in result.summary or result.summary == ""
     
-    mock_router_client.add.assert_not_called()
-    mock_router_client.update.assert_not_called()
-    mock_router_client.delete.assert_not_called()
+    mock_router_client.create_resource.assert_not_called()
+    mock_router_client.update_resource.assert_not_called()
+    mock_router_client.delete_resource.assert_not_called()

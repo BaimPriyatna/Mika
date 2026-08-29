@@ -47,6 +47,7 @@ class MockRouterClient:
 
     _RESOURCE_TABLES = {
         "/interface": "interfaces",
+        "/interface/vlan": "interfaces",
         "/ip/address": "addresses",
         "/ip/route": "routes",
         "/ip/firewall/filter": "firewall_rules",
@@ -56,6 +57,16 @@ class MockRouterClient:
         "/ip/dhcp-server/lease": "dhcp_leases",
         "/ip/hotspot": "hotspot_servers",
         "/ip/hotspot/user": "hotspot_users",
+    }
+
+    # RouterOS implies certain fields based on which specific menu created
+    # a resource (e.g. POSTing to /interface/vlan doesn't require "type" in
+    # the body -- RouterOS assigns it). The real REST/Binary clients pass
+    # requests straight through, so nothing needs to change there, but this
+    # in-memory mock has no such implicit behavior and must inject it so
+    # later reads (e.g. via get_interfaces) see a correctly-typed record.
+    _IMPLICIT_CREATE_FIELDS = {
+        "/interface/vlan": {"type": "vlan"},
     }
 
     def _table(self, resource: str) -> list[dict]:
@@ -117,7 +128,8 @@ class MockRouterClient:
     async def create_resource(self, resource: str, data: dict) -> dict:
         await self._check("create_resource")
         table = self._table(resource)
-        record = {".id": self._next_id(table), **data}
+        implicit = self._IMPLICIT_CREATE_FIELDS.get(resource, {})
+        record = {".id": self._next_id(table), **implicit, **data}
         table.append(record)
         return copy.deepcopy(record)
 

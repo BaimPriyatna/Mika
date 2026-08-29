@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-08-29
+
+### Fixed
+- **Critical**: no configuration change could ever actually be applied to a router. `executor.py` called `self._client.add()`/`.update()`/`.delete()`, methods that have never existed on any `RouterClient` implementation -- only `create_resource()`/`update_resource()`/`delete_resource()` exist. Every plan, including `create_hotspot`, crashed with `AttributeError` at the execution step; planning and validation worked fine and completely masked this. Went undetected because the existing executor tests mocked the router client with a bare `AsyncMock()` shaped nothing like the real `RouterClient` protocol.
+- `verification.py` and `rollback.py`'s resource-reader maps were missing `/ip/firewall/nat`, `/queue/simple`, and `/interface/vlan` -- verification would silently skip or falsely fail these, and rollback backups would silently fail to capture prior state for queues and VLAN interfaces before applying a change.
+- `mock.py`: `/interface/vlan` was entirely unmapped (creation raised "unknown resource path"), and had no implicit `type: vlan` field injection, so a created VLAN interface would misreport its type on the next read.
+
+### Changed
+- Router-client-mocking tests now use `AsyncMock(spec=RouterClient)` instead of a bare `AsyncMock()`, so a mock diverging from the real protocol raises immediately instead of silently masking bugs.
+- New `tests/integration/test_full_pipeline_real_client.py` exercises the full plan → validate → backup → execute → verify → rollback pipeline against the real `MockRouterClient` (not a loose mock) for several resource types.
+
 ## [0.2.3] - 2026-08-29
 
 ### Added

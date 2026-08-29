@@ -155,6 +155,9 @@ class Verifier:
             "/ip/hotspot/profile": self._read_hotspot_profiles,
             "/ip/hotspot/user": self._client.get_hotspot_users,
             "/ip/firewall/filter": self._client.get_firewall_rules,
+            "/ip/firewall/nat": self._client.get_nat_rules,
+            "/queue/simple": self._client.get_queues,
+            "/interface/vlan": self._client.get_interfaces,
             "/ip/route": self._client.get_routes,
             "/interface": self._client.get_interfaces,
         }

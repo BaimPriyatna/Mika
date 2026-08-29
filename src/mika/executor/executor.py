@@ -120,7 +120,7 @@ class Executor:
         
         try:
             if step.operation == OperationType.CREATE:
-                await self._client.add(step.resource, step.data)
+                await self._client.create_resource(step.resource, step.data)
                 
             elif step.operation == OperationType.UPDATE:
                 if not step.resource_id:
@@ -128,7 +128,7 @@ class Executor:
                         f"UPDATE operation requires resource_id, but step {step.step_id} "
                         f"has no resource_id"
                     )
-                await self._client.update(step.resource, step.resource_id, step.data)
+                await self._client.update_resource(step.resource, step.resource_id, step.data)
                 
             elif step.operation == OperationType.DELETE:
                 if not step.resource_id:
@@ -136,7 +136,7 @@ class Executor:
                         f"DELETE operation requires resource_id, but step {step.step_id} "
                         f"has no resource_id"
                     )
-                await self._client.delete(step.resource, step.resource_id)
+                await self._client.delete_resource(step.resource, step.resource_id)
                 
             else:
                 raise ExecutionError(f"Unknown operation type: {step.operation}")

@@ -14,6 +14,7 @@ from mika.executor import (
 )
 from mika.planner.diff import generate_diff
 from mika.planner.plan import OperationType, Plan, PlanStatus, PlanStep
+from mika.router.client import RouterClient
 
 
 def _make_ask_mock(value):
@@ -89,8 +90,8 @@ async def test_full_workflow_plan_confirm_execute(
     assert confirmation.status.value == "confirmed"
     assert confirmation.plan_id == sample_plan.plan_id
 
-    mock_router = AsyncMock()
-    mock_router.add = AsyncMock()
+    mock_router = AsyncMock(spec=RouterClient)
+    mock_router.create_resource = AsyncMock()
     
     executor = Executor(mock_router)
     result = await executor.execute(sample_plan, confirmation)
@@ -99,7 +100,7 @@ async def test_full_workflow_plan_confirm_execute(
     assert result.commands_applied == 2
     assert result.error is None
 
-    assert mock_router.add.call_count == 2
+    assert mock_router.create_resource.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -124,7 +125,7 @@ async def test_full_workflow_user_declines_confirmation(
     assert confirmation.is_confirmed is False
     assert confirmation.status.value == "cancelled"
 
-    mock_router = AsyncMock()
+    mock_router = AsyncMock(spec=RouterClient)
     executor = Executor(mock_router)
 
     with pytest.raises(ExecutionDenied) as exc_info:
@@ -132,7 +133,7 @@ async def test_full_workflow_user_declines_confirmation(
 
     assert "confirmation required" in str(exc_info.value).lower()
     
-    mock_router.add.assert_not_called()
+    mock_router.create_resource.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -160,7 +161,7 @@ async def test_workflow_cannot_skip_validation_gate(sample_plan: Plan) -> None:
 
     confirmation = ConfirmationState.confirmed(unvalidated_plan.plan_id, "test_user")
 
-    mock_router = AsyncMock()
+    mock_router = AsyncMock(spec=RouterClient)
     executor = Executor(mock_router)
 
     with pytest.raises(ExecutionDenied) as exc_info:
@@ -168,7 +169,7 @@ async def test_workflow_cannot_skip_validation_gate(sample_plan: Plan) -> None:
 
     assert "not validated" in str(exc_info.value).lower()
     
-    mock_router.add.assert_not_called()
+    mock_router.create_resource.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -217,12 +218,12 @@ async def test_workflow_destructive_operation_requires_typed_confirmation(
     assert confirmation.is_confirmed is True
     mock_prompt.assert_called_once()
 
-    mock_router = AsyncMock()
-    mock_router.delete = AsyncMock()
+    mock_router = AsyncMock(spec=RouterClient)
+    mock_router.delete_resource = AsyncMock()
     
     executor = Executor(mock_router)
     result = await executor.execute(destructive_plan, confirmation)
 
     assert result.success is True
     assert result.commands_applied == 1
-    mock_router.delete.assert_called_once_with("/ip/hotspot", "*1")
+    mock_router.delete_resource.assert_called_once_with("/ip/hotspot", "*1")
