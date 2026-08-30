@@ -1,5 +1,5 @@
 [project]
-name = "mika"
+name = "mika-cli"
 version = "0.2.5"
 description = "AI-powered MikroTik RouterOS assistant - Natural language CLI for configuration, troubleshooting, and monitoring."
 requires-python = ">=3.12"
