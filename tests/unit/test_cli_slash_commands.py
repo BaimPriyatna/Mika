@@ -85,15 +85,24 @@ def _router_group(router_alias, count):
     return RouterSessionGroup(router_alias=router_alias, session_count=count)
 
 
+def _mock_question(return_value):
+    """A fake questionary.Question-like object matching what wizard._ask()
+    needs: .application.key_bindings.add(...) (sync, chained call) plus an
+    async .ask_async()."""
+    q = AsyncMock()
+    q.ask_async = AsyncMock(return_value=return_value)
+    q.application = Mock()
+    q.application.key_bindings.add = Mock(return_value=Mock())
+    return q
+
+
 def _two_selects(router_return, session_return):
     """questionary.select is called twice by _cmd_history (router picker,
     then session picker) -- return a factory yielding one mock per call."""
     calls = iter([router_return, session_return])
 
     def _factory(*args, **kwargs):
-        q = AsyncMock()
-        q.ask_async = AsyncMock(return_value=next(calls))
-        return q
+        return _mock_question(next(calls))
 
     return _factory
 
@@ -234,6 +243,41 @@ async def test_cmd_history_router_removed_label(console, mock_session):
     assert any("(router removed)" in label for label in labels)
 
 
+@pytest.mark.asyncio
+async def test_cmd_history_prints_conversation_transcript_not_table(console, mock_session):
+    """Regression: /history used to dump a plain Role/Message Rich table
+    after switching sessions, which didn't read like an actual resumed
+    conversation. It should print each turn as a chat line instead."""
+    from mika.memory.sessions import SessionSummary
+
+    mock_session.session_store.list_routers_with_sessions.return_value = [_router_group("lab", 1)]
+    mock_session.session_store.list_sessions.return_value = [
+        SessionSummary(
+            id="current-session-id",
+            title="fix vlan 10",
+            started_at="2026-08-27T00:00:00",
+            updated_at="2026-08-27T00:05:00",
+            message_count=2,
+            router_alias="lab",
+        ),
+    ]
+    mock_session.history = [
+        HistoryEntry("user", "fix vlan 10"),
+        HistoryEntry("assistant", "Sure, here's how to configure VLAN 10."),
+    ]
+    printed = []
+    console.print = lambda *args, **kwargs: printed.append(str(args[0]) if args else "")
+
+    with patch("questionary.select", side_effect=_two_selects("lab", "current-session-id")):
+        await slash_commands._cmd_history("", mock_session, console)
+
+    combined = "\n".join(printed)
+    assert "fix vlan 10" in combined
+    assert "Sure, here's how to configure VLAN 10." in combined
+    assert "◆ Mika:" in combined
+    assert "Conversation History" not in combined  # old table title must be gone
+
+
 def test_truncate_label_short_text_unchanged():
     assert slash_commands.truncate_label("membuat vlan 10") == "membuat vlan 10"
 
@@ -256,7 +300,7 @@ async def test_cmd_model_no_arg_opens_selection_menu(console, mock_session):
         return_value=("gemini", "gemini-1.5-pro"),
     ) as m:
         await slash_commands._cmd_model("", mock_session, console)
-    m.assert_called_once_with(mock_session.config)
+    m.assert_called_once_with(mock_session.config, session=mock_session)
     mock_session.activate_provider.assert_called_once_with("gemini", "gemini-1.5-pro")
     mock_session.persist_active_selection.assert_called_once()
 
@@ -315,9 +359,7 @@ async def test_cmd_router_add(mock_save, mock_wizard, console, mock_session):
     mock_session.persist_active_selection = Mock()
     mock_session.config_path = Mock()
 
-    q_mock = AsyncMock()
-    q_mock.ask_async = AsyncMock(return_value="manual")
-    with patch("questionary.select", return_value=q_mock):
+    with patch("questionary.select", return_value=_mock_question("manual")):
         await slash_commands._cmd_router("add", mock_session, console)
 
     assert "lab" in mock_session.config.routers
@@ -343,15 +385,14 @@ async def test_cmd_router_add_with_scan(mock_save, mock_wizard, mock_scan, conso
     mock_session.persist_active_selection = Mock()
     mock_session.config_path = Mock()
 
-    q_mock = AsyncMock()
-    q_mock.ask_async = AsyncMock(return_value="scan")
-    with patch("questionary.select", return_value=q_mock):
+    with patch("questionary.select", return_value=_mock_question("scan")):
         await slash_commands._cmd_router("add", mock_session, console)
 
     mock_scan.assert_awaited_once()
     mock_wizard.assert_awaited_once_with(
         existing_aliases=[],
         discovered=device,
+        session=mock_session,
     )
     assert "office" in mock_session.config.routers
 
@@ -449,9 +490,7 @@ async def test_cmd_router_remove_interactive(mock_save, console, mock_session):
     }
     mock_session.router_alias = "lab"
 
-    q_mock = AsyncMock()
-    q_mock.ask_async = AsyncMock(return_value="lab")
-    with patch("questionary.select", return_value=q_mock):
+    with patch("questionary.select", return_value=_mock_question("lab")):
         await slash_commands._cmd_router("remove", mock_session, console)
 
     assert "lab" not in mock_session.config.routers
@@ -474,9 +513,7 @@ async def test_cmd_reset(console, mock_session):
     mock_session.model_name = "gemini-1.5-flash"
     mock_session.config_path = Path("/tmp/dummy_config.toml")
 
-    q_mock = AsyncMock()
-    q_mock.ask_async = AsyncMock(return_value=True)
-    with patch("questionary.confirm", return_value=q_mock), patch("mika.cli.config.save_config"):
+    with patch("questionary.confirm", return_value=_mock_question(True)), patch("mika.cli.config.save_config"):
         await slash_commands._cmd_reset("", mock_session, console)
 
     assert len(mock_session.config.routers) == 0
@@ -489,9 +526,7 @@ def _pick(*values):
     calls = iter(values)
 
     def _factory(*args, **kwargs):
-        q = AsyncMock()
-        q.ask_async = AsyncMock(return_value=next(calls))
-        return q
+        return _mock_question(next(calls))
 
     return _factory
 

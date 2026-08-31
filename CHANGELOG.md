@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] - 2026-08-30
+
+### Fixed
+- Escape now cancels every interactive picker in the app (provider setup, router setup, model selection, `/history`, `/rewind`, `/reset`, etc.) — previously only Ctrl+C/Ctrl+Q actually worked, despite the UI claiming "Esc cancel".
+- The router/provider/model status header no longer disappears while a picker is open; it now stays visible for the duration of the interaction instead of only showing before/after.
+- Fixed a latent circular import between `mika.cli.wizard` and `mika.ai.providers.gemini` that could surface an `ImportError` depending on which module happened to be imported first.
+
 ## [0.2.5] - 2026-08-29
 
 ### Fixed

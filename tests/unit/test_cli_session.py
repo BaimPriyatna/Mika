@@ -266,11 +266,36 @@ def test_start_new_session_clears_history_and_gets_new_id(session_with_mock_rout
     assert [m.text for m in old_messages] == ["old session message"]
 
 
+@pytest.mark.asyncio
+async def test_start_new_session_preserves_router_and_provider_state(session_with_mock_router):
+    """Regression / documentation of investigated behavior: /clear (which
+    calls start_new_session()) must only reset the conversation, never the
+    active router connection, provider, or model. A user reporting
+    'router: none' after /clear was seeing accurate state (no router had
+    ever been selected in that run) -- not a bug in start_new_session()
+    clobbering an already-active router."""
+    session = session_with_mock_router
+    session.connect_router("mock-router")
+    session.activate_provider("gemini", "gemini-1.5-flash", api_key="test-key")
+    router_client_before = session.router_client
+
+    session.start_new_session()
+
+    assert session.router_alias == "mock-router"
+    assert session.router_client is router_client_before
+    assert session.provider_name == "gemini"
+    assert session.model_name == "gemini-1.5-flash"
+    assert session.provider is not None
+    # only the conversation actually resets
+    assert session.history == []
+
+
 def test_start_new_session_default_tags_with_current_router_alias(session_with_mock_router):
     session = session_with_mock_router
     session.router_alias = "mock-router"
 
     session.start_new_session()
+    session.add_history("user", "hello")  # sessions need >=1 message to be listed
 
     groups = {g.router_alias: g.session_count for g in session.session_store.list_routers_with_sessions()}
     assert "mock-router" in groups
@@ -285,6 +310,7 @@ def test_start_new_session_explicit_router_alias_overrides_current(session_with_
     session.router_alias = "old-router"  # simulates state before connect_router() runs
 
     session.start_new_session(router_alias="new-router")
+    session.add_history("user", "hello")  # sessions need >=1 message to be listed
 
     groups = {g.router_alias: g.session_count for g in session.session_store.list_routers_with_sessions()}
     assert "new-router" in groups
@@ -296,6 +322,7 @@ def test_start_new_session_explicit_none_creates_no_router_session(session_with_
     session.router_alias = "some-router"
 
     session.start_new_session(router_alias=None)
+    session.add_history("user", "hello")  # sessions need >=1 message to be listed
 
     groups = {g.router_alias: g.session_count for g in session.session_store.list_routers_with_sessions()}
     assert None in groups

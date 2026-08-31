@@ -122,12 +122,14 @@ def test_add_message_returns_message_id(store):
 
 def test_create_session_with_router_alias(store):
     sid = store.create_session(router_alias="lab-router")
+    store.add_message(sid, "user", "hello")
     summaries = store.list_sessions()
     assert summaries[0].router_alias == "lab-router"
 
 
 def test_create_session_without_router_alias_is_none(store):
-    store.create_session()
+    sid = store.create_session()
+    store.add_message(sid, "user", "hello")
     summaries = store.list_sessions()
     assert summaries[0].router_alias is None
 
@@ -144,7 +146,9 @@ def test_list_sessions_filtered_by_router(store):
 
 def test_list_sessions_filtered_by_no_router(store):
     sid_none = store.create_session(router_alias=None)
-    store.create_session(router_alias="router-a")
+    store.add_message(sid_none, "user", "hello")
+    sid_a = store.create_session(router_alias="router-a")
+    store.add_message(sid_a, "user", "hi")
 
     only_none = store.list_sessions(router_alias=None)
     assert [s.id for s in only_none] == [sid_none]
@@ -162,6 +166,34 @@ def test_list_routers_with_sessions_groups_and_counts(store):
 
     groups = {g.router_alias: g.session_count for g in store.list_routers_with_sessions()}
     assert groups == {"router-a": 2, "router-b": 1, None: 1}
+
+
+def test_list_sessions_excludes_empty_sessions(store):
+    sid_empty = store.create_session(router_alias="router-a")
+    sid_with_msg = store.create_session(router_alias="router-a")
+    store.add_message(sid_with_msg, "user", "hello")
+
+    summaries = store.list_sessions()
+    assert [s.id for s in summaries] == [sid_with_msg]
+    assert sid_empty not in [s.id for s in summaries]
+
+
+def test_list_routers_with_sessions_excludes_router_with_only_empty_sessions(store):
+    store.create_session(router_alias="router-empty")  # no messages ever added
+    sid = store.create_session(router_alias="router-a")
+    store.add_message(sid, "user", "hello")
+
+    groups = {g.router_alias for g in store.list_routers_with_sessions()}
+    assert groups == {"router-a"}
+    assert "router-empty" not in groups
+
+
+def test_list_routers_with_sessions_router_disappears_when_its_only_session_becomes_empty_relative(store):
+    """A router whose sessions are all still empty shouldn't inflate the
+    picker with a dead-end entry that has nothing to open."""
+    store.create_session(router_alias="router-a")
+    groups = store.list_routers_with_sessions()
+    assert groups == []
 
 
 def test_trim_after_deletes_later_messages(store):

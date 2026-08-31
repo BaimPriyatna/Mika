@@ -119,15 +119,21 @@ class SessionStore:
 
     def list_routers_with_sessions(self) -> list[RouterSessionGroup]:
         """Level-1 grouping for /history: one entry per router that has at
-        least one saved session, plus a '(no router)' bucket for sessions
-        created before any router was ever selected. Ordered by most
-        recently active."""
+        least one saved session with at least one message, plus a
+        '(no router)' bucket for such sessions created before any router
+        was ever selected. Empty sessions (0 messages -- nothing to
+        resume) don't count. Ordered by most recently active."""
         with db.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("""
-                SELECT router_alias, COUNT(*) AS session_count, MAX(updated_at) AS last_active
-                FROM sessions
-                GROUP BY router_alias
+                SELECT s.router_alias AS router_alias,
+                       COUNT(*) AS session_count,
+                       MAX(s.updated_at) AS last_active
+                FROM sessions s
+                WHERE EXISTS (
+                    SELECT 1 FROM session_messages m WHERE m.session_id = s.id
+                )
+                GROUP BY s.router_alias
                 ORDER BY last_active DESC
             """).fetchall()
         return [
@@ -136,7 +142,9 @@ class SessionStore:
         ]
 
     def list_sessions(self, router_alias: str | None = "__any__", limit: int = 50) -> list[SessionSummary]:
-        """List sessions, most recently updated first. `router_alias`:
+        """List sessions that have at least one message (empty sessions have
+        nothing to resume, so they're excluded), most recently updated
+        first. `router_alias`:
         - "__any__" (default): no filter, all sessions
         - None: only sessions with no router (router_alias IS NULL)
         - a string: only sessions for that router
@@ -151,7 +159,7 @@ class SessionStore:
         if router_alias != "__any__":
             query += " WHERE s.router_alias IS ?"
             params.append(router_alias)
-        query += " GROUP BY s.id ORDER BY s.updated_at DESC LIMIT ?"
+        query += " GROUP BY s.id HAVING COUNT(m.id) > 0 ORDER BY s.updated_at DESC LIMIT ?"
         params.append(limit)
 
         with db.connect(self.db_path) as conn:
@@ -203,8 +211,14 @@ class SessionStore:
 
     def resolve_id(self, ref: str) -> str | None:
         """Resolve a session reference: either a full/partial id prefix or a
-        1-based index into the most-recently-updated sessions list."""
-        if ref.isdigit():
+        1-based index into the most-recently-updated sessions list.
+
+        Numeric refs up to 4 digits (index into a realistically small list)
+        are tried as an index; longer numeric-looking refs are almost
+        certainly a UUID prefix that happens to be all digits, so those go
+        straight to prefix lookup instead.
+        """
+        if ref.isdigit() and len(ref) <= 4:
             summaries = self.list_sessions(limit=1000)
             idx = int(ref) - 1
             if 0 <= idx < len(summaries):

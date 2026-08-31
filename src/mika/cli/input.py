@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.application import get_app
@@ -12,7 +13,8 @@ from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory, History, InMemoryHistory
 from prompt_toolkit.styles import Style
 
-from mika.cli.session import ChatSession
+if TYPE_CHECKING:
+    from mika.cli.session import ChatSession
 
 _HISTORY_PATH = Path.home() / ".config" / "mika" / "chat_history"
 
@@ -20,9 +22,11 @@ _COMMANDS = {
     "/help": ("Show list of available commands", {}),
     "/exit": ("Exit MIKA REPL", {}),
     "/clear": ("Clear screen and session history", {}),
-    "/history": ("Show conversation history", {}),
+    "/history": ("Browse and resume saved conversation sessions", {}),
+    "/rewind": ("Roll back router config to an earlier point in the conversation", {}),
     "/model": ("Select or switch active AI model", {}),
     "/provider": ("Configure AI provider", {}),
+    "/troubleshoot": ("Diagnose a router issue from a symptom description", {}),
     "/router": (
         "Manage router connections",
         {

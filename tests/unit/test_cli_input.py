@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from prompt_toolkit.document import Document
 
-from mika.cli.input import MikaCompleter, build_prompt_session
+from mika.cli.input import _COMMANDS, MikaCompleter, build_prompt_session
 
 
 def _get_completions(text: str) -> list[str]:
@@ -64,3 +64,22 @@ def test_prompt_session_disables_completion_threading():
     session = build_prompt_session()
     assert session.complete_in_thread is False
     assert session.complete_while_typing is True
+
+
+def test_every_slash_command_has_a_completer_entry():
+    """Regression: _HANDLERS (slash_commands.py) and _COMMANDS (input.py's
+    completer) are two independently-maintained registries with no shared
+    source of truth. Both /rewind and /troubleshoot were added to
+    _HANDLERS but silently missing from _COMMANDS, so they worked as
+    commands but never showed up in tab-completion. This test fails
+    immediately (instead of only being noticed by a human) if a future
+    command is added to one but not the other."""
+    from mika.cli.slash_commands import _HANDLERS
+
+    handler_commands = set(_HANDLERS.keys())
+    completer_commands = set(_COMMANDS.keys())
+    missing_from_completer = handler_commands - completer_commands
+    assert not missing_from_completer, (
+        f"Commands registered in _HANDLERS but missing from input._COMMANDS "
+        f"(won't tab-complete): {sorted(missing_from_completer)}"
+    )

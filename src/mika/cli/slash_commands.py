@@ -144,12 +144,15 @@ async def _cmd_history(arg: str, session: ChatSession, console: Console) -> None
         )
         for g in groups
     ]
-    selected_router_raw = await questionary.select(
-        "Select router:",
-        choices=router_choices,
-        style=wizard._WIZARD_STYLE,
-        qmark="◈",
-    ).ask_async()
+    selected_router_raw = await wizard._ask(
+        questionary.select(
+            "Select router:",
+            choices=router_choices,
+            style=wizard._WIZARD_STYLE,
+            qmark="◈",
+        ),
+        session=session,
+    )
     if selected_router_raw is None:
         return  # cancelled (Esc)
     selected_router = None if selected_router_raw == _NO_ROUTER_SENTINEL else selected_router_raw
@@ -165,12 +168,15 @@ async def _cmd_history(arg: str, session: ChatSession, console: Console) -> None
         label = f"{truncate_label(s.title)}{marker}  ·  {s.message_count} msgs  ·  {s.updated_at}"
         choices.append(questionary.Choice(title=label, value=s.id))
 
-    selected = await questionary.select(
-        "Select a session to open:",
-        choices=choices,
-        style=wizard._WIZARD_STYLE,
-        qmark="◈",
-    ).ask_async()
+    selected = await wizard._ask(
+        questionary.select(
+            "Select a session to open:",
+            choices=choices,
+            style=wizard._WIZARD_STYLE,
+            qmark="◈",
+        ),
+        session=session,
+    )
 
     if selected is None:
         return  # cancelled (Esc)
@@ -186,10 +192,13 @@ async def _cmd_history(arg: str, session: ChatSession, console: Console) -> None
     if not session.history:
         console.print("[dim](history is empty)[/dim]")
         return
-    table = _table("Conversation History", "Role", "Message")
+    console.print()
     for entry in session.history:
-        table.add_row(entry.role, entry.text)
-    console.print(table)
+        if entry.role == "user":
+            console.print(f"[bold cyan]›[/bold cyan] {escape(entry.text)}")
+        else:
+            console.print(f"[bold #c084fc]◆ Mika:[/bold #c084fc] {escape(entry.text)}")
+    console.print()
 
 
 async def _cmd_rewind(arg: str, session: ChatSession, console: Console) -> None:
@@ -212,23 +221,29 @@ async def _cmd_rewind(arg: str, session: ChatSession, console: Console) -> None:
         console.print("[dim](nothing to rewind)[/dim]")
         return
 
-    selected_idx = await questionary.select(
-        "Rewind router config to this point:",
-        choices=choices,
-        style=wizard._WIZARD_STYLE,
-        qmark="◈",
-    ).ask_async()
+    selected_idx = await wizard._ask(
+        questionary.select(
+            "Rewind router config to this point:",
+            choices=choices,
+            style=wizard._WIZARD_STYLE,
+            qmark="◈",
+        ),
+        session=session,
+    )
     if selected_idx is None:
         return  # cancelled (Esc)
 
     target_message_id = session.history[selected_idx].message_id
 
-    confirmed = await questionary.confirm(
-        "This will roll back the router's actual configuration to match this point. Continue?",
-        default=False,
-        style=wizard._WIZARD_STYLE,
-        qmark="⚠️ ",
-    ).ask_async()
+    confirmed = await wizard._ask(
+        questionary.confirm(
+            "This will roll back the router's actual configuration to match this point. Continue?",
+            default=False,
+            style=wizard._WIZARD_STYLE,
+            qmark="⚠️ ",
+        ),
+        session=session,
+    )
     if not confirmed:
         console.print("[dim]Rewind cancelled.[/dim]")
         return
@@ -263,7 +278,7 @@ async def _cmd_model(arg: str, session: ChatSession, console: Console) -> None:
         console.print(f"[green]Model switched to {escape(arg)}.[/green]")
         return
 
-    selected = await wizard.select_model(session.config)
+    selected = await wizard.select_model(session.config, session=session)
     if selected is None:
         return
     provider, model = selected
@@ -273,7 +288,7 @@ async def _cmd_model(arg: str, session: ChatSession, console: Console) -> None:
 
 
 async def _cmd_provider(arg: str, session: ChatSession, console: Console) -> None:
-    provider_name, models = await wizard.run_provider_wizard()
+    provider_name, models = await wizard.run_provider_wizard(session=session)
     for model in models:
         session.config.remember_model(provider_name, model)
     cli_config.save_config(session.config, session.config_path)
@@ -307,7 +322,7 @@ async def _cmd_router(arg: str, session: ChatSession, console: Console) -> None:
         if sub_arg:
             alias = sub_arg
         else:
-            choice = await wizard.select_router(session.config, active_alias=session.router_alias)
+            choice = await wizard.select_router(session.config, active_alias=session.router_alias, session=session)
             if choice is None:
                 return
             if choice == "__add__":
@@ -345,12 +360,15 @@ async def _cmd_router(arg: str, session: ChatSession, console: Console) -> None:
             ]
             choices.append(questionary.Choice(title="Cancel", value=None))
 
-            selected = await questionary.select(
-                "Select router to remove:",
-                choices=choices,
-                style=wizard._WIZARD_STYLE,
-                qmark="◈",
-            ).ask_async()
+            selected = await wizard._ask(
+                questionary.select(
+                    "Select router to remove:",
+                    choices=choices,
+                    style=wizard._WIZARD_STYLE,
+                    qmark="◈",
+                ),
+                session=session,
+            )
 
             if not selected:
                 console.print("[dim]Cancelled.[/dim]")
@@ -391,27 +409,31 @@ async def _add_router(session: ChatSession, console: Console) -> None:
 
     _WIZARD_STYLE = wizard._WIZARD_STYLE
 
-    method = await _q.select(
-        "How to connect to router?",
-        choices=[
-            _q.Choice(title="◉  Scan local network (MNDP — auto-discover)", value="scan"),
-            _q.Choice(title="✎  Enter host / IP manually", value="manual"),
-        ],
-        style=_WIZARD_STYLE,
-        qmark="◈",
-        instruction="(Use arrow keys)",
-    ).ask_async()
+    method = await wizard._ask(
+        _q.select(
+            "How to connect to router?",
+            choices=[
+                _q.Choice(title="◉  Scan local network (MNDP — auto-discover)", value="scan"),
+                _q.Choice(title="✎  Enter host / IP manually", value="manual"),
+            ],
+            style=_WIZARD_STYLE,
+            qmark="◈",
+            instruction="(Use arrow keys)",
+        ),
+        session=session,
+    )
 
     if method is None:
         return
 
     discovered: MndpDevice | None = None
     if method == "scan":
-        discovered = await wizard.scan_and_select_router()
+        discovered = await wizard.scan_and_select_router(session=session)
 
     alias, profile = await wizard.run_router_wizard(
         existing_aliases=list(session.config.routers),
         discovered=discovered,
+        session=session,
     )
     session.config.routers[alias] = profile
     cli_config.save_config(session.config, session.config_path)
@@ -425,7 +447,7 @@ async def _cmd_inspect(arg: str, session: ChatSession, console: Console) -> None
     if arg:
         target = arg
     else:
-        target = await wizard.select_inspect_target()
+        target = await wizard.select_inspect_target(session=session)
         if target is None:
             return
     client = session.require_router()
@@ -468,12 +490,15 @@ async def _cmd_backup(arg: str, session: ChatSession, console: Console) -> None:
 
 
 async def _cmd_reset(arg: str, session: ChatSession, console: Console) -> None:
-    confirmed = await questionary.confirm(
-        "Reset all Mika configuration, registered routers, and saved credentials?",
-        default=False,
-        style=wizard._WIZARD_STYLE,
-        qmark="⚠️ ",
-    ).ask_async()
+    confirmed = await wizard._ask(
+        questionary.confirm(
+            "Reset all Mika configuration, registered routers, and saved credentials?",
+            default=False,
+            style=wizard._WIZARD_STYLE,
+            qmark="⚠️ ",
+        ),
+        session=session,
+    )
 
     if not confirmed:
         console.print("[dim]Reset cancelled.[/dim]")

@@ -1,81 +1,86 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 
 import questionary
 import httpx
+from prompt_toolkit.key_binding.key_bindings import KeyBindings, merge_key_bindings
+from prompt_toolkit.keys import Keys
 from rich.console import Console
 
 from mika.ai.errors import AIAuthenticationError, AIError
+from mika.ai.provider_registry import (
+    _MODEL_FETCHERS,
+    _PROVIDER_DISPLAY_NAMES,
+    provider_choices as _provider_choices,
+    register_model_fetcher,
+)
 from mika.cli import config as cli_config
 from mika.cli import env_secrets
 from mika.cli.errors import CliError
+from mika.cli.input import build_header_status
 from mika.router.mndp import MndpDevice, scan as mndp_scan
+
+if TYPE_CHECKING:
+    from mika.cli.session import ChatSession
 
 console = Console()
 
 _CUSTOM_MODEL_CHOICE = "__custom__"
 _MANUAL_HOST_CHOICE = "__manual__"
 
-_PROVIDER_DISPLAY_NAMES: dict[str, str] = {
-    "gemini": "Google Gemini",
-    "openai": "OpenAI (coming soon)",
-    "local": "Local model (coming soon)",
-}
+_WIZARD_STYLE = questionary.Style(
+    [
+        ("qmark", "fg:#c084fc bold"),
+        ("question", "bold white"),
+        ("pointer", "fg:#c084fc bold"),
+        ("highlighted", "fg:#c084fc bold"),
+        ("selected", "fg:#10b981 bold"),
+        ("instruction", "fg:#888888 italic"),
+        ("disabled", "fg:#666666 italic"),
+    ]
+)
 
-_WIZARD_STYLE = questionary.Style([
-    ("qmark", "fg:#c084fc bold"),
-    ("question", "bold white"),
-    ("pointer", "fg:#c084fc bold"),
-    ("highlighted", "fg:#c084fc bold"),
-    ("selected", "fg:#10b981 bold"),
-    ("instruction", "fg:#888888 italic"),
-    ("disabled", "fg:#666666 italic"),
-])
 
-_MODEL_FETCHERS: dict[str, Callable[[str], Awaitable[list[str]]]] = {}
+async def _ask(question: questionary.Question, session: "ChatSession | None" = None) -> object:
+    """Run any questionary prompt (select/confirm/text/password) with two
+    fixes applied consistently everywhere, instead of ad-hoc per call site:
+
+    1. Escape cancels, same as Ctrl+C/Ctrl+Q (questionary only binds those
+       two by default -- Escape does nothing on its own, even though the
+       status line has always told the user "Esc cancel").
+    2. The status header (router/provider/model) is printed to the
+       console exactly ONCE, immediately before the prompt starts
+       rendering -- not on every keystroke or re-render. Printing it from
+       inside a key binding or render callback (tried previously) causes
+       it to reprint on every arrow-key press, since those fire on every
+       navigation event; a plain one-shot console.print() before
+       `ask_async()` avoids that entirely, because questionary's own
+       render loop repaints only its own prompt area, leaving whatever
+       was printed before it untouched in the scrollback.
+    """
+    extra_bindings = KeyBindings()
+    extra_bindings.add(Keys.Escape, eager=True)(lambda event: event.app.exit(result=None))
+    question.application.key_bindings = merge_key_bindings([question.application.key_bindings, extra_bindings])
+    if session is not None:
+        console.print(build_header_status(session))
+    return await question.ask_async()
 
 
 class WizardCancelled(CliError):
     pass
 
 
-def register_model_fetcher(provider: str, display_name: str | None = None) -> Callable:
-    """Register a provider's model fetcher.
-
-    A provider is only ever selectable in the wizard if it has a fetcher
-    registered here -- there is no separate "available" flag to fall out of
-    sync. `display_name` is optional; if omitted, an existing entry in
-    `_PROVIDER_DISPLAY_NAMES` (or the raw provider key) is used.
-    """
-    def decorator(fn: Callable[[str], Awaitable[list[str]]]) -> Callable:
-        _MODEL_FETCHERS[provider] = fn
-        if display_name:
-            _PROVIDER_DISPLAY_NAMES[provider] = display_name
-        else:
-            _PROVIDER_DISPLAY_NAMES.setdefault(provider, provider)
-        return fn
-    return decorator
-
-
-def _provider_choices() -> list[questionary.Choice]:
-    """Build the provider picker choices. A provider is selectable if and
-    only if it has a registered model fetcher -- this makes it structurally
-    impossible for the picker to offer a provider whose fetcher is missing."""
-    return [
-        questionary.Choice(
-            title=label,
-            value=key,
-            disabled=None if key in _MODEL_FETCHERS else "coming soon",
-        )
-        for key, label in _PROVIDER_DISPLAY_NAMES.items()
-    ]
-
-
-async def scan_and_select_router(timeout: float = 5.0) -> MndpDevice | None:
+async def scan_and_select_router(
+    timeout: float = 5.0, session: "ChatSession | None" = None
+) -> MndpDevice | None:
     console.print()
-    with console.status("[bold #c084fc]◆[/bold #c084fc] Scanning local network for MikroTik devices...", spinner="dots"):
+    with console.status(
+        "[bold #c084fc]◆[/bold #c084fc] Scanning local network for MikroTik devices...", spinner="dots"
+    ):
         import asyncio
+
         try:
             devices = await asyncio.wait_for(mndp_scan(timeout=timeout), timeout=timeout + 1)
         except asyncio.TimeoutError:
@@ -101,40 +106,46 @@ async def scan_and_select_router(timeout: float = 5.0) -> MndpDevice | None:
 
     choices.append(questionary.Choice(title="✎  Enter host / IP manually", value=None))
 
-    selected = await questionary.select(
-        "Select a router:",
-        choices=choices,
-        style=_WIZARD_STYLE,
-        qmark="◈",
-        instruction="(Use arrow keys)",
-    ).ask_async()
+    selected = await _ask(
+        questionary.select(
+            "Select a router:",
+            choices=choices,
+            style=_WIZARD_STYLE,
+            qmark="◈",
+            instruction="(Use arrow keys)",
+        ),
+        session=session,
+    )
 
     return selected
 
 
-async def select_model(config: cli_config.AppConfig) -> tuple[str, str]:
+async def select_model(config: cli_config.AppConfig, session: "ChatSession | None" = None) -> tuple[str, str]:
     existing_choices = [
         questionary.Choice(title=f"{entry.provider}: {entry.model}", value=(entry.provider, entry.model))
         for entry in config.models
     ]
     existing_choices.append(questionary.Choice(title="+ Add new model", value="__add__"))
 
-    selected = await questionary.select(
-        "Select model:",
-        choices=existing_choices,
-        style=_WIZARD_STYLE,
-        qmark="◈",
-    ).ask_async()
+    selected = await _ask(
+        questionary.select(
+            "Select model:",
+            choices=existing_choices,
+            style=_WIZARD_STYLE,
+            qmark="◈",
+        ),
+        session=session,
+    )
 
     if selected is None:
         raise WizardCancelled("Model selection cancelled.")
 
     if selected == "__add__":
-        provider, models = await run_provider_wizard()
+        provider, models = await run_provider_wizard(session=session)
         if len(models) == 1:
             model = models[0]
         else:
-            model = await _select_fetched_model(models)
+            model = await _select_fetched_model(models, session=session)
         for m in models:
             config.remember_model(provider, m)
         return provider, model
@@ -142,7 +153,9 @@ async def select_model(config: cli_config.AppConfig) -> tuple[str, str]:
     return selected
 
 
-async def select_router(config: cli_config.AppConfig, *, active_alias: str | None = None) -> str | None:
+async def select_router(
+    config: cli_config.AppConfig, *, active_alias: str | None = None, session: "ChatSession | None" = None
+) -> str | None:
     choices = []
     for alias, profile in config.routers.items():
         label = f"{alias}  ({profile.host}:{profile.port}  {profile.backend})"
@@ -151,33 +164,43 @@ async def select_router(config: cli_config.AppConfig, *, active_alias: str | Non
         choices.append(questionary.Choice(title=label, value=alias))
     choices.append(questionary.Choice(title="+ Add new router", value="__add__"))
 
-    selected = await questionary.select(
-        "Select router:",
-        choices=choices,
-        style=_WIZARD_STYLE,
-        qmark="◈",
-    ).ask_async()
+    selected = await _ask(
+        questionary.select(
+            "Select router:",
+            choices=choices,
+            style=_WIZARD_STYLE,
+            qmark="◈",
+        ),
+        session=session,
+    )
 
     return selected
 
 
-async def select_inspect_target() -> str | None:
+async def select_inspect_target(session: "ChatSession | None" = None) -> str | None:
     from mika.cli.render import INSPECT_TARGETS
-    return await questionary.select(
-        "Select inspect target:",
-        choices=list(INSPECT_TARGETS),
-        style=_WIZARD_STYLE,
-        qmark="◈",
-    ).ask_async()
+
+    return await _ask(
+        questionary.select(
+            "Select inspect target:",
+            choices=list(INSPECT_TARGETS),
+            style=_WIZARD_STYLE,
+            qmark="◈",
+        ),
+        session=session,
+    )
 
 
-async def run_provider_wizard() -> tuple[str, list[str]]:
-    provider = await questionary.select(
-        "Select AI provider:",
-        choices=_provider_choices(),
-        style=_WIZARD_STYLE,
-        qmark="◈",
-    ).ask_async()
+async def run_provider_wizard(session: "ChatSession | None" = None) -> tuple[str, list[str]]:
+    provider = await _ask(
+        questionary.select(
+            "Select AI provider:",
+            choices=_provider_choices(),
+            style=_WIZARD_STYLE,
+            qmark="◈",
+        ),
+        session=session,
+    )
     if provider is None:
         raise WizardCancelled("Provider selection cancelled.")
 
@@ -191,28 +214,36 @@ async def run_provider_wizard() -> tuple[str, list[str]]:
     existing_key = env_secrets.get_provider_secret(provider)
     api_key = existing_key
     if existing_key:
-        action = await questionary.select(
-            f"{provider} is already configured.",
-            choices=[
-                questionary.Choice(title="Use existing API key", value="use"),
-                questionary.Choice(title="Replace API key", value="replace"),
-                questionary.Choice(title="Cancel", value="cancel"),
-            ],
-            style=_WIZARD_STYLE,
-            qmark="◈",
-        ).ask_async()
+        action = await _ask(
+            questionary.select(
+                f"{provider} is already configured.",
+                choices=[
+                    questionary.Choice(title="Use existing API key", value="use"),
+                    questionary.Choice(title="Replace API key", value="replace"),
+                    questionary.Choice(title="Cancel", value="cancel"),
+                ],
+                style=_WIZARD_STYLE,
+                qmark="◈",
+            ),
+            session=session,
+        )
         if action is None or action == "cancel":
             raise WizardCancelled("Provider configuration cancelled.")
         if action == "replace":
-            api_key = None  # fall through to key-entry loop below; old key stays untouched until fetch succeeds
+            api_key = (
+                None  # fall through to key-entry loop below; old key stays untouched until fetch succeeds
+            )
 
     while True:
         if api_key is None:
-            api_key = await questionary.password(
-                f"Enter API key for {provider}:",
-                style=_WIZARD_STYLE,
-                qmark="◈",
-            ).ask_async()
+            api_key = await _ask(
+                questionary.password(
+                    f"Enter API key for {provider}:",
+                    style=_WIZARD_STYLE,
+                    qmark="◈",
+                ),
+                session=session,
+            )
             if api_key is None:
                 raise WizardCancelled("API key input cancelled.")
 
@@ -221,21 +252,26 @@ async def run_provider_wizard() -> tuple[str, list[str]]:
                 models = await fetcher(api_key)
         except AIAuthenticationError as exc:
             console.print(f"[red]API key rejected by {provider}:[/red] {exc}")
-            retry = await questionary.confirm(
-                "Try entering a different API key?", default=True
-            ).ask_async()
+            retry = await _ask(
+                questionary.confirm("Try entering a different API key?", default=True),
+                session=session,
+            )
             if not retry:
                 raise WizardCancelled("API key rejected; user declined to retry.") from exc
             api_key = None
             continue
         except AIError as exc:
             console.print(f"[yellow]Failed to fetch model list from {provider}:[/yellow] {exc}")
-            fallback = await questionary.confirm(
-                "Enter model name manually?", default=True
-            ).ask_async()
+            fallback = await _ask(
+                questionary.confirm("Enter model name manually?", default=True),
+                session=session,
+            )
             if not fallback:
                 raise WizardCancelled("Model list fetch failed; user declined manual entry.") from exc
-            model = await questionary.text("Model name:", style=_WIZARD_STYLE, qmark="◈").ask_async()
+            model = await _ask(
+                questionary.text("Model name:", style=_WIZARD_STYLE, qmark="◈"),
+                session=session,
+            )
             if not model:
                 raise WizardCancelled("Custom model name cancelled or empty.") from exc
             if api_key != existing_key:
@@ -248,20 +284,26 @@ async def run_provider_wizard() -> tuple[str, list[str]]:
         return provider, models
 
 
-async def _select_fetched_model(models: list[str]) -> str:
+async def _select_fetched_model(models: list[str], session: "ChatSession | None" = None) -> str:
     choices = [questionary.Choice(title=name, value=name) for name in models]
     choices.append(questionary.Choice(title="Custom (enter model name)", value=_CUSTOM_MODEL_CHOICE))
 
-    model = await questionary.select(
-        "Select model:",
-        choices=choices,
-        style=_WIZARD_STYLE,
-        qmark="◈",
-    ).ask_async()
+    model = await _ask(
+        questionary.select(
+            "Select model:",
+            choices=choices,
+            style=_WIZARD_STYLE,
+            qmark="◈",
+        ),
+        session=session,
+    )
     if model is None:
         raise WizardCancelled("Model selection cancelled.")
     if model == _CUSTOM_MODEL_CHOICE:
-        model = await questionary.text("Model name:", style=_WIZARD_STYLE, qmark="◈").ask_async()
+        model = await _ask(
+            questionary.text("Model name:", style=_WIZARD_STYLE, qmark="◈"),
+            session=session,
+        )
         if not model:
             raise WizardCancelled("Custom model name cancelled or empty.")
     return model
@@ -292,6 +334,7 @@ async def run_router_wizard(
     *,
     existing_aliases: list[str] | None = None,
     discovered: MndpDevice | None = None,
+    session: "ChatSession | None" = None,
 ) -> tuple[str, cli_config.RouterProfileConfig]:
     existing = set(existing_aliases or [])
 
@@ -307,13 +350,16 @@ async def run_router_wizard(
         slug = discovered.identity.lower().replace(" ", "-").replace("_", "-")
         default_alias = slug if slug not in existing else ""
 
-    alias = await questionary.text(
-        "Router alias (e.g. 'office', 'lab'):",
-        default=default_alias,
-        validate=_validate_alias,
-        style=_WIZARD_STYLE,
-        qmark="◈",
-    ).ask_async()
+    alias = await _ask(
+        questionary.text(
+            "Router alias (e.g. 'office', 'lab'):",
+            default=default_alias,
+            validate=_validate_alias,
+            style=_WIZARD_STYLE,
+            qmark="◈",
+        ),
+        session=session,
+    )
     if not alias:
         raise WizardCancelled("Router alias input cancelled or empty.")
 
@@ -328,59 +374,75 @@ async def run_router_wizard(
             )
             console.print("[dim]then run /router add again.[/dim]")
             console.print()
-            proceed = await questionary.confirm(
-                "Continue anyway (enter IP manually)?",
-                default=False,
-                style=_WIZARD_STYLE,
-                qmark="◈",
-            ).ask_async()
+            proceed = await _ask(
+                questionary.confirm(
+                    "Continue anyway (enter IP manually)?",
+                    default=False,
+                    style=_WIZARD_STYLE,
+                    qmark="◈",
+                ),
+                session=session,
+            )
             if not proceed:
                 raise WizardCancelled("Router has no IP address; user aborted.")
-            host = await questionary.text(
-                "Router Host / IP:",
-                style=_WIZARD_STYLE,
-                qmark="◈",
-            ).ask_async()
+            host = await _ask(
+                questionary.text(
+                    "Router Host / IP:",
+                    style=_WIZARD_STYLE,
+                    qmark="◈",
+                ),
+                session=session,
+            )
             if not host:
                 raise WizardCancelled("Host input cancelled or empty.")
         else:
             host = discovered.display_host
-            console.print(
-                f"[bold #c084fc]◆[/bold #c084fc] Using discovered host: [bold]{host}[/bold]"
-            )
+            console.print(f"[bold #c084fc]◆[/bold #c084fc] Using discovered host: [bold]{host}[/bold]")
     else:
-        host = await questionary.text(
-            "Router Host / IP:",
-            style=_WIZARD_STYLE,
-            qmark="◈",
-        ).ask_async()
+        host = await _ask(
+            questionary.text(
+                "Router Host / IP:",
+                style=_WIZARD_STYLE,
+                qmark="◈",
+            ),
+            session=session,
+        )
         if not host:
             raise WizardCancelled("Host input cancelled or empty.")
 
-    username = await questionary.text(
-        "Username:",
-        default="admin",
-        style=_WIZARD_STYLE,
-        qmark="◈",
-    ).ask_async()
+    username = await _ask(
+        questionary.text(
+            "Username:",
+            default="admin",
+            style=_WIZARD_STYLE,
+            qmark="◈",
+        ),
+        session=session,
+    )
     if not username:
         raise WizardCancelled("Username input cancelled or empty.")
 
-    password = await questionary.password(
-        "Password: (leave empty if not set)",
-        style=_WIZARD_STYLE,
-        qmark="◈",
-    ).ask_async()
+    password = await _ask(
+        questionary.password(
+            "Password: (leave empty if not set)",
+            style=_WIZARD_STYLE,
+            qmark="◈",
+        ),
+        session=session,
+    )
     if password is None:
         raise WizardCancelled("Password input cancelled.")
 
     console.print("[dim]Probing router for REST API support...[/dim]")
-    rest_port_raw = await questionary.text(
-        "REST API Port (for v7 probe):",
-        default="443",
-        style=_WIZARD_STYLE,
-        qmark="◈",
-    ).ask_async()
+    rest_port_raw = await _ask(
+        questionary.text(
+            "REST API Port (for v7 probe):",
+            default="443",
+            style=_WIZARD_STYLE,
+            qmark="◈",
+        ),
+        session=session,
+    )
     if rest_port_raw is None:
         raise WizardCancelled("Port input cancelled.")
     try:
@@ -392,12 +454,15 @@ async def run_router_wizard(
 
     if rest_available:
         console.print("[green]✓ RouterOS REST API detected (v7+). Using REST backend.[/green]")
-        verify_tls = await questionary.confirm(
-            "Verify TLS certificate?",
-            default=False,
-            style=_WIZARD_STYLE,
-            qmark="◈",
-        ).ask_async()
+        verify_tls = await _ask(
+            questionary.confirm(
+                "Verify TLS certificate?",
+                default=False,
+                style=_WIZARD_STYLE,
+                qmark="◈",
+            ),
+            session=session,
+        )
         if verify_tls is None:
             raise WizardCancelled("TLS confirmation cancelled.")
 
@@ -412,15 +477,20 @@ async def run_router_wizard(
         )
         port = rest_port
 
-        api_proto = await questionary.select(
-            "Binary API connection type:",
-            choices=[
-                questionary.Choice(title="Plaintext (port 8728) — recommended for local/trusted networks", value="plain"),
-                questionary.Choice(title="SSL / TLS (port 8729) — encrypted connection", value="ssl"),
-            ],
-            style=_WIZARD_STYLE,
-            qmark="◈",
-        ).ask_async()
+        api_proto = await _ask(
+            questionary.select(
+                "Binary API connection type:",
+                choices=[
+                    questionary.Choice(
+                        title="Plaintext (port 8728) — recommended for local/trusted networks", value="plain"
+                    ),
+                    questionary.Choice(title="SSL / TLS (port 8729) — encrypted connection", value="ssl"),
+                ],
+                style=_WIZARD_STYLE,
+                qmark="◈",
+            ),
+            session=session,
+        )
         if api_proto is None:
             raise WizardCancelled("Binary API protocol selection cancelled.")
 
@@ -429,41 +499,57 @@ async def run_router_wizard(
         api_ssl_verify = False
 
         if use_ssl:
-            cert_mode = await questionary.select(
-                "SSL certificate handling:",
-                choices=[
-                    questionary.Choice(title="Trust Self-Signed Certificate (Default / Auto)", value="self_signed"),
-                    questionary.Choice(title="Custom CA / Certificate file (.crt / .pem)", value="custom"),
-                ],
-                style=_WIZARD_STYLE,
-                qmark="◈",
-            ).ask_async()
+            cert_mode = await _ask(
+                questionary.select(
+                    "SSL certificate handling:",
+                    choices=[
+                        questionary.Choice(
+                            title="Trust Self-Signed Certificate (Default / Auto)", value="self_signed"
+                        ),
+                        questionary.Choice(
+                            title="Custom CA / Certificate file (.crt / .pem)", value="custom"
+                        ),
+                    ],
+                    style=_WIZARD_STYLE,
+                    qmark="◈",
+                ),
+                session=session,
+            )
             if cert_mode is None:
                 raise WizardCancelled("Certificate mode selection cancelled.")
 
             if cert_mode == "custom":
-                api_ssl_cert = await questionary.text(
-                    "Path to certificate/CA file:",
-                    style=_WIZARD_STYLE,
-                    qmark="◈",
-                ).ask_async()
+                api_ssl_cert = await _ask(
+                    questionary.text(
+                        "Path to certificate/CA file:",
+                        style=_WIZARD_STYLE,
+                        qmark="◈",
+                    ),
+                    session=session,
+                )
                 if not api_ssl_cert:
                     raise WizardCancelled("Certificate path cannot be empty.")
-                strict_verify = await questionary.confirm(
-                    "Enable strict hostname & cert verification?",
-                    default=True,
-                    style=_WIZARD_STYLE,
-                    qmark="◈",
-                ).ask_async()
+                strict_verify = await _ask(
+                    questionary.confirm(
+                        "Enable strict hostname & cert verification?",
+                        default=True,
+                        style=_WIZARD_STYLE,
+                        qmark="◈",
+                    ),
+                    session=session,
+                )
                 api_ssl_verify = bool(strict_verify)
 
         default_api_port = 8729 if use_ssl else 8728
-        api_port_raw = await questionary.text(
-            "Binary API Port:",
-            default=str(default_api_port),
-            style=_WIZARD_STYLE,
-            qmark="◈",
-        ).ask_async()
+        api_port_raw = await _ask(
+            questionary.text(
+                "Binary API Port:",
+                default=str(default_api_port),
+                style=_WIZARD_STYLE,
+                qmark="◈",
+            ),
+            session=session,
+        )
         if api_port_raw is None:
             raise WizardCancelled("Binary API port input cancelled.")
         try:

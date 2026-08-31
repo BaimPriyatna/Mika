@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -308,4 +308,11 @@ class TestExistingApiKeyFlow:
 def _asked(value):
     q = AsyncMock()
     q.ask_async = AsyncMock(return_value=value)
+    # _ask() (wizard.py) registers an Escape-cancels binding via
+    # question.application.key_bindings.add(...) before calling
+    # ask_async() -- give the mock a plain (non-async) callable chain for
+    # that, since it's synchronous in real usage (KeyBindings.add returns a
+    # decorator, called immediately with the handler function).
+    q.application = Mock()
+    q.application.key_bindings.add = Mock(return_value=Mock())
     return q

@@ -25,7 +25,7 @@ from mika.ai.errors import (
 )
 from mika.ai.prompts.builder import build_system_prompt, build_user_prompt
 from mika.ai.schemas import AnyIntent, IntentValidationError, parse_intent
-from mika.cli.wizard import register_model_fetcher
+from mika.ai.provider_registry import register_model_fetcher
 
 logger = logging.getLogger(__name__)
 
