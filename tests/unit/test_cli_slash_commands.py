@@ -207,7 +207,7 @@ async def test_cmd_history_select_other_session_switches(console, mock_session):
     ]
     with patch("questionary.select", side_effect=_two_selects("lab", "other-id")):
         await slash_commands._cmd_history("", mock_session, console)
-    mock_session.resume_session.assert_called_once_with("other-id")
+    mock_session.resume_session.assert_called_once_with("other-id", router_alias="lab")
 
 
 @pytest.mark.asyncio
@@ -278,6 +278,149 @@ async def test_cmd_history_prints_conversation_transcript_not_table(console, moc
     assert "Conversation History" not in combined  # old table title must be gone
 
 
+@pytest.mark.asyncio
+async def test_cmd_history_router_not_connected_warning(console, mock_session):
+    """Session's router exists in config but isn't the live connection ->
+    a distinct, non-blocking warning (not the same wording as 'removed')."""
+    from mika.memory.sessions import SessionSummary
+
+    mock_session.config.routers = {"lab": Mock()}
+    mock_session.router_alias = None  # nothing connected right now
+    mock_session.router_client = None
+    mock_session.session_store.list_routers_with_sessions.return_value = [_router_group("lab", 1)]
+    mock_session.session_store.list_sessions.return_value = [
+        SessionSummary(
+            id="current-session-id", title="fix vlan", started_at="2026-08-27T00:00:00",
+            updated_at="2026-08-27T00:05:00", message_count=1, router_alias="lab",
+        ),
+    ]
+    mock_session.history = [HistoryEntry("user", "fix vlan")]
+    printed = []
+    console.print = lambda *args, **kwargs: printed.append(str(args[0]) if args else "")
+
+    with patch("questionary.select", side_effect=_two_selects("lab", "current-session-id")):
+        await slash_commands._cmd_history("", mock_session, console)
+
+    assert "not connected" in "\n".join(printed)
+
+
+@pytest.mark.asyncio
+async def test_router_removed_vs_not_connected_messages_differ(console, mock_session):
+    """The 'router no longer exists' and 'router not connected' warnings
+    must read differently so the user knows which situation they're in."""
+    removed_msg = []
+    notconn_msg = []
+
+    def _capture(sink):
+        def _p(*args, **kwargs):
+            sink.append(str(args[0]) if args else "")
+        return _p
+
+    # Case 1: router removed from config entirely.
+    console.print = _capture(removed_msg)
+    slash_commands._print_router_connection_warning("lab", mock_session, console)
+
+    # Case 2: router still registered, just not the live connection.
+    mock_session.config.routers = {"lab": Mock()}
+    mock_session.router_alias = None
+    mock_session.router_client = None
+    console.print = _capture(notconn_msg)
+    slash_commands._print_router_connection_warning("lab", mock_session, console)
+
+    removed_text = "\n".join(removed_msg)
+    notconn_text = "\n".join(notconn_msg)
+    assert removed_text != notconn_text
+    assert "no longer exists" in removed_text
+    assert "not connected" in notconn_text
+
+
+@pytest.mark.asyncio
+async def test_cmd_history_replays_advice_via_render_advice(console, mock_session):
+    from mika.memory.sessions import SessionSummary
+
+    mock_session.session_store.list_routers_with_sessions.return_value = [_router_group("lab", 1)]
+    mock_session.session_store.list_sessions.return_value = [
+        SessionSummary(
+            id="current-session-id", title="advise me", started_at="2026-08-27T00:00:00",
+            updated_at="2026-08-27T00:05:00", message_count=1, router_alias="lab",
+        ),
+    ]
+    mock_session.history = [
+        HistoryEntry(
+            "assistant", "Consider enabling NAT.", render_kind="advice",
+            render_payload='{"message": "Consider enabling NAT.", "options": ["Enable now"], "suggested_action": null}',
+        ),
+    ]
+
+    with patch("questionary.select", side_effect=_two_selects("lab", "current-session-id")):
+        with patch("mika.cli.render.render_advice") as mock_render:
+            await slash_commands._cmd_history("", mock_session, console)
+
+    mock_render.assert_called_once_with(console, "Consider enabling NAT.", ["Enable now"], None)
+
+
+@pytest.mark.asyncio
+async def test_cmd_history_replay_falls_back_to_plain_on_bad_payload(console, mock_session):
+    """A malformed/legacy payload must not crash the replay -- it should
+    degrade to a plain text line instead."""
+    from mika.memory.sessions import SessionSummary
+
+    mock_session.session_store.list_routers_with_sessions.return_value = [_router_group("lab", 1)]
+    mock_session.session_store.list_sessions.return_value = [
+        SessionSummary(
+            id="current-session-id", title="broken", started_at="2026-08-27T00:00:00",
+            updated_at="2026-08-27T00:05:00", message_count=1, router_alias="lab",
+        ),
+    ]
+    mock_session.history = [
+        HistoryEntry("assistant", "inspected interfaces", render_kind="inspect", render_payload="not json"),
+    ]
+    printed = []
+    console.print = lambda *args, **kwargs: printed.append(str(args[0]) if args else "")
+
+    with patch("questionary.select", side_effect=_two_selects("lab", "current-session-id")):
+        await slash_commands._cmd_history("", mock_session, console)
+
+    assert "inspected interfaces" in "\n".join(printed)
+
+
+@pytest.mark.asyncio
+async def test_cmd_connect_no_router_raises(console, mock_session):
+    from mika.cli.errors import CliError
+
+    mock_session.router_alias = None
+    with pytest.raises(CliError, match="No router associated"):
+        await slash_commands._cmd_connect("", mock_session, console)
+
+
+@pytest.mark.asyncio
+async def test_cmd_connect_success(console, mock_session):
+    mock_session.router_alias = "lab"
+    mock_session.connect_router = Mock()
+    mock_session.persist_active_selection = Mock()
+
+    await slash_commands._cmd_connect("", mock_session, console)
+
+    mock_session.connect_router.assert_called_once_with("lab")
+    mock_session.persist_active_selection.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_cmd_connect_router_removed_gives_distinct_message(console, mock_session):
+    from mika.cli.errors import CliError, RouterProfileNotFoundError
+
+    mock_session.router_alias = "lab"
+    mock_session.connect_router = Mock(side_effect=RouterProfileNotFoundError("No router profile named 'lab'."))
+
+    with pytest.raises(CliError) as exc_info:
+        await slash_commands._cmd_connect("", mock_session, console)
+
+    # Must not be word-for-word identical to the /history "no longer exists"
+    # warning -- different command, different phrasing, same underlying fact.
+    assert "no longer exists" not in str(exc_info.value)
+    assert "lab" in str(exc_info.value)
+
+
 def test_truncate_label_short_text_unchanged():
     assert slash_commands.truncate_label("membuat vlan 10") == "membuat vlan 10"
 
@@ -339,9 +482,43 @@ async def test_cmd_router_status_no_active(console, mock_session):
 async def test_cmd_router_select(console, mock_session):
     mock_session.connect_router = Mock()
     mock_session.persist_active_selection = Mock()
+    mock_session.start_new_session = Mock()
+    console.clear = Mock()
     await slash_commands._cmd_router("select lab", mock_session, console)
     mock_session.connect_router.assert_called_once_with("lab")
     mock_session.persist_active_selection.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_cmd_router_select_clears_screen_on_switch(console, mock_session):
+    """Switching to a different router does a full console.clear() so the
+    old router's conversation transcript doesn't linger on screen."""
+    mock_session.router_alias = "old-router"
+    mock_session.connect_router = Mock()
+    mock_session.persist_active_selection = Mock()
+    mock_session.start_new_session = Mock()
+    console.clear = Mock()
+
+    await slash_commands._cmd_router("select lab", mock_session, console)
+
+    console.clear.assert_called_once()
+    mock_session.start_new_session.assert_called_once_with(router_alias="lab")
+
+
+@pytest.mark.asyncio
+async def test_cmd_router_select_same_router_does_not_clear_or_restart_session(console, mock_session):
+    """Re-selecting the already-active router is a no-op for the
+    session/screen -- only an actual switch should clear."""
+    mock_session.router_alias = "lab"
+    mock_session.connect_router = Mock()
+    mock_session.persist_active_selection = Mock()
+    mock_session.start_new_session = Mock()
+    console.clear = Mock()
+
+    await slash_commands._cmd_router("select lab", mock_session, console)
+
+    console.clear.assert_not_called()
+    mock_session.start_new_session.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -364,6 +541,26 @@ async def test_cmd_router_add(mock_save, mock_wizard, console, mock_session):
 
     assert "lab" in mock_session.config.routers
     mock_session.connect_router.assert_called_once_with("lab")
+
+
+@pytest.mark.asyncio
+@patch("mika.cli.wizard.run_router_wizard", new_callable=AsyncMock)
+@patch("mika.cli.config.save_config")
+async def test_cmd_router_add_clears_screen(mock_save, mock_wizard, console, mock_session):
+    from mika.cli.config import RouterProfileConfig
+
+    mock_wizard.return_value = ("lab", RouterProfileConfig(host="192.168.88.1", username="admin", backend="rest"))
+    mock_session.connect_router = Mock()
+    mock_session.persist_active_selection = Mock()
+    mock_session.start_new_session = Mock()
+    mock_session.config_path = Mock()
+    console.clear = Mock()
+
+    with patch("questionary.select", return_value=_mock_question("manual")):
+        await slash_commands._cmd_router("add", mock_session, console)
+
+    console.clear.assert_called_once()
+    mock_session.start_new_session.assert_called_once_with(router_alias="lab")
 
 
 @pytest.mark.asyncio
@@ -579,7 +776,8 @@ async def test_cmd_rewind_success(console, mock_session):
         patch("questionary.confirm", side_effect=_pick(True)),
     ):
         await slash_commands._cmd_rewind("", mock_session, console)
-    mock_session.rewind_to.assert_called_once_with(1)
+    mock_session.rewind_to.assert_called_once_with(0)
+    assert mock_session.pending_draft == "hi"
 
 
 @pytest.mark.asyncio
@@ -625,3 +823,103 @@ async def test_cmd_rewind_raises_rewind_error(console, mock_session):
         patch("questionary.confirm", side_effect=_pick(True)),
     ):
         await slash_commands._cmd_rewind("", mock_session, console)
+
+
+@pytest.mark.asyncio
+async def test_cmd_rewind_only_offers_user_entries(console, mock_session):
+    """Assistant replies can't be rewind targets -- only user messages."""
+    mock_session.history = [
+        HistoryEntry("user", "first request", message_id=1),
+        HistoryEntry("assistant", "here's the answer", message_id=2, render_kind="advice"),
+        HistoryEntry("user", "second request", message_id=3),
+    ]
+    with patch("questionary.select", side_effect=_pick(None)) as mock_select:
+        await slash_commands._cmd_rewind("", mock_session, console)
+    choice_titles = [c.title for c in mock_select.call_args.kwargs["choices"]]
+    assert choice_titles == ["first request", "second request"]
+
+
+@pytest.mark.asyncio
+async def test_cmd_rewind_anchors_to_message_before_selected(console, mock_session):
+    """Selecting the 2nd user message must roll back to the message
+    *before* it (index shift), not to the selected message's own id --
+    the selected message and everything after it gets deleted."""
+    from mika.cli.session import RewindResult
+
+    mock_session.history = [
+        HistoryEntry("user", "first request", message_id=1),
+        HistoryEntry("assistant", "answer one", message_id=2),
+        HistoryEntry("user", "second request", message_id=3),
+    ]
+    mock_session.rewind_to = AsyncMock(
+        return_value=RewindResult(attempted=1, succeeded=1, stopped_early=False, errors=[])
+    )
+    # index 2 in session.history == "second request"
+    with (
+        patch("questionary.select", side_effect=_pick(2)),
+        patch("questionary.confirm", side_effect=_pick(True)),
+    ):
+        await slash_commands._cmd_rewind("", mock_session, console)
+
+    mock_session.rewind_to.assert_called_once_with(2)  # message_id of the entry *before* "second request"
+    assert mock_session.pending_draft == "second request"
+
+
+@pytest.mark.asyncio
+async def test_cmd_rewind_index_zero_uses_destructive_confirm_wording(console, mock_session):
+    """Rewinding to the very first message undoes the entire session --
+    this must get a distinctly stronger confirmation prompt."""
+    from mika.cli.session import RewindResult
+
+    mock_session.history = [HistoryEntry("user", "only message", message_id=1)]
+    mock_session.rewind_to = AsyncMock(
+        return_value=RewindResult(attempted=1, succeeded=1, stopped_early=False, errors=[])
+    )
+    with (
+        patch("questionary.select", side_effect=_pick(0)),
+        patch("questionary.confirm", side_effect=_pick(True)) as mock_confirm,
+    ):
+        await slash_commands._cmd_rewind("", mock_session, console)
+
+    prompt_text = mock_confirm.call_args.args[0] if mock_confirm.call_args.args else mock_confirm.call_args.kwargs.get("message", "")
+    assert "cannot be undone" in prompt_text.lower() or "every" in prompt_text.lower()
+    mock_session.rewind_to.assert_called_once_with(0)
+
+
+@pytest.mark.asyncio
+async def test_cmd_rewind_stopped_early_does_not_set_pending_draft(console, mock_session):
+    """A partial/failed rewind doesn't trim history, so there's nothing
+    coherent to pre-fill -- the draft must stay unset."""
+    from mika.cli.session import RewindResult
+
+    mock_session.history = [HistoryEntry("user", "hi", message_id=1)]
+    mock_session.pending_draft = None
+    mock_session.rewind_to = AsyncMock(
+        return_value=RewindResult(attempted=2, succeeded=1, stopped_early=True, errors=["boom"])
+    )
+    with (
+        patch("questionary.select", side_effect=_pick(0)),
+        patch("questionary.confirm", side_effect=_pick(True)),
+    ):
+        await slash_commands._cmd_rewind("", mock_session, console)
+
+    assert mock_session.pending_draft is None
+
+
+@pytest.mark.asyncio
+async def test_cmd_rewind_no_backups_still_sets_pending_draft(console, mock_session):
+    """The 'nothing to undo' edge case (no plan backups after the anchor)
+    still trims history and pre-fills the draft, per the no-backups spec."""
+    from mika.cli.session import RewindResult
+
+    mock_session.history = [HistoryEntry("user", "hi", message_id=1)]
+    mock_session.rewind_to = AsyncMock(
+        return_value=RewindResult(attempted=0, succeeded=0, stopped_early=False, errors=[])
+    )
+    with (
+        patch("questionary.select", side_effect=_pick(0)),
+        patch("questionary.confirm", side_effect=_pick(True)),
+    ):
+        await slash_commands._cmd_rewind("", mock_session, console)
+
+    assert mock_session.pending_draft == "hi"

@@ -27,6 +27,7 @@ _COMMANDS = {
     "/model": ("Select or switch active AI model", {}),
     "/provider": ("Configure AI provider", {}),
     "/troubleshoot": ("Diagnose a router issue from a symptom description", {}),
+    "/connect": ("Reconnect to this session's router", {}),
     "/router": (
         "Manage router connections",
         {
@@ -235,5 +236,5 @@ def build_prompt_session(session: ChatSession | None = None) -> PromptSession:
     )
 
 
-async def read_line(session: PromptSession) -> str:
-    return await session.prompt_async()
+async def read_line(session: PromptSession, default: str = "") -> str:
+    return await session.prompt_async(default=default)

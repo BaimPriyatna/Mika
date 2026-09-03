@@ -24,7 +24,7 @@ async def test_broken_slash_command_does_not_crash_repl_loop(tmp_path):
 
     lines = iter(["/broken", "/exit"])
 
-    async def fake_read_line(_prompt_session):
+    async def fake_read_line(_prompt_session, default=""):
         return next(lines)
 
     async def fake_dispatch(line, _session, _console):
@@ -47,3 +47,36 @@ async def test_broken_slash_command_does_not_crash_repl_loop(tmp_path):
     assert "boom" in output
     assert "Session continues" in output
     assert "Goodbye" in output
+
+
+@pytest.mark.asyncio
+async def test_pending_draft_is_passed_to_read_line_and_consumed_once(tmp_path):
+    """/rewind sets session.pending_draft so the next prompt is pre-filled
+    with the rewound message's original text. The main loop must forward
+    it as read_line's `default` exactly once, then clear it so it doesn't
+    leak into subsequent prompts."""
+    session = ChatSession.create(config_path=tmp_path / "config.toml", memory_db_path=tmp_path / "memory.db")
+    session.pending_draft = "original request text"
+    console = Console(record=True)
+
+    seen_defaults = []
+    lines = iter(["edited request", "/exit"])
+
+    async def fake_read_line(_prompt_session, default=""):
+        seen_defaults.append(default)
+        return next(lines)
+
+    async def fake_handle_chat_turn(_line, _session, _console):
+        pass
+
+    with (
+        patch("mika.cli.repl.read_line", fake_read_line),
+        patch("mika.cli.repl.build_prompt_session", return_value=None),
+        patch("mika.cli.repl._handle_chat_turn", fake_handle_chat_turn),
+        patch("mika.cli.repl._print_startup_message"),
+        patch("mika.cli.repl._print_startup_status"),
+    ):
+        await run_repl(session, console)
+
+    assert seen_defaults == ["original request text", ""]
+    assert session.pending_draft is None

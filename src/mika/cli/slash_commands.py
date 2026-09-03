@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import questionary
 from rich import box
 from rich.console import Console
@@ -8,10 +10,17 @@ from rich.table import Table
 
 from mika.cli import config as cli_config
 from mika.cli import env_secrets, render, wizard
-from mika.cli.errors import CliError, NoActiveRouterError, RewindError, SessionNotFoundError
+from mika.cli.errors import (
+    CliError,
+    NoActiveRouterError,
+    RewindError,
+    RouterProfileNotFoundError,
+    SessionNotFoundError,
+)
 from mika.cli.input import build_status_bar
-from mika.cli.session import ChatSession
-from mika.router.discovery import discover
+from mika.cli.session import ChatSession, HistoryEntry
+from mika.router.discovery import RouterContext, discover
+from mika.troubleshoot.models import DiagnosisResult
 from mika.utils.printer import status_spinner
 
 HELP_TEXT = """\
@@ -23,6 +32,7 @@ Available commands:
   /router add                 Register a new router (interactive wizard)
   /router remove [alias]      Remove a registered router
   /router status              Show active router
+  /connect                    Reconnect to this session's router
   /status                     Session summary (router, provider, history)
   /inspect <target>           View read-only data: router, interfaces,
                               addresses, routes, firewall, dhcp, hotspot
@@ -35,6 +45,7 @@ Available commands:
   /help                       Show this help message
   /exit                       Exit REPL session
 """
+
 
 
 class ExitRepl(Exception):
@@ -183,12 +194,41 @@ async def _cmd_history(arg: str, session: ChatSession, console: Console) -> None
 
     if selected != session.session_id:
         try:
-            session.resume_session(selected)
+            session.resume_session(selected, router_alias=selected_router)
         except SessionNotFoundError as exc:
             console.print(f"[yellow]{escape(str(exc))}[/yellow]")
             return
-        console.print("[green]Switched to session.[/green]")
 
+    _print_startup_banner()
+    _print_router_connection_warning(selected_router, session, console)
+    _replay_history(session, console)
+    await _cmd_status("", session, console)
+
+
+def _print_startup_banner() -> None:
+    from mika.cli.repl import _print_startup_message
+
+    _print_startup_message()
+
+
+def _print_router_connection_warning(target_alias: str | None, session: ChatSession, console: Console) -> None:
+    """After opening a session via /history, warn (without blocking) if the
+    session's router isn't actually reachable right now."""
+    if target_alias is None:
+        return  # this session was never tied to a router
+    if target_alias not in session.config.routers:
+        console.print(
+            f"[yellow]⚠︎ Router '{escape(target_alias)}' no longer exists. "
+            f"Add it again via /router add, or work offline (read-only replay).[/yellow]"
+        )
+    elif session.router_alias != target_alias or session.router_client is None:
+        console.print(
+            f"[yellow]⚠︎ Router '{escape(target_alias)}' is not connected. "
+            f"Run /connect (or /router select {escape(target_alias)}) to reconnect.[/yellow]"
+        )
+
+
+def _replay_history(session: ChatSession, console: Console) -> None:
     if not session.history:
         console.print("[dim](history is empty)[/dim]")
         return
@@ -197,25 +237,79 @@ async def _cmd_history(arg: str, session: ChatSession, console: Console) -> None
         if entry.role == "user":
             console.print(f"[bold cyan]›[/bold cyan] {escape(entry.text)}")
         else:
-            console.print(f"[bold #c084fc]◆ Mika:[/bold #c084fc] {escape(entry.text)}")
+            _replay_assistant_entry(entry, console)
     console.print()
 
 
+def _replay_assistant_entry(entry: HistoryEntry, console: Console) -> None:
+    """Re-render an assistant history entry as close to its original
+    presentation as render_kind/render_payload allow. Falls back to a
+    plain text line for unknown kinds, missing/unparsable payloads, and
+    legacy pre-0.3.0 rows (which never had a payload to begin with)."""
+    payload = None
+    if entry.render_payload:
+        try:
+            payload = json.loads(entry.render_payload)
+        except (json.JSONDecodeError, TypeError):
+            payload = None
+
+    if payload is not None:
+        try:
+            if entry.render_kind == "advice":
+                render.render_advice(console, payload.get("message", entry.text), payload.get("options"), payload.get("suggested_action"))
+                return
+            if entry.render_kind == "inspect":
+                ctx = RouterContext.model_validate(payload["ctx"])
+                render.render_inspect(console, payload["target"], ctx)
+                return
+            if entry.render_kind == "troubleshoot":
+                render.render_diagnosis(console, DiagnosisResult.model_validate(payload))
+                return
+            if entry.render_kind == "execution_summary":
+                render.render_execution_summary(console, payload.get("plan_summary"), payload.get("diff", ""), payload.get("outcome", ""))
+                return
+        except Exception:
+            pass  # malformed/incompatible payload -- fall through to plain text
+
+    if entry.render_kind == "error":
+        console.print(f"[red]{escape(entry.text)}[/red]")
+        return
+
+    console.print(f"[bold #c084fc]◆ Mika:[/bold #c084fc] {escape(entry.text)}")
+
+
+async def _cmd_connect(arg: str, session: ChatSession, console: Console) -> None:
+    """Reconnect to the router this session is scoped to, using its
+    already-stored credentials."""
+    if session.router_alias is None:
+        raise CliError("No router associated with this session.")
+    alias = session.router_alias
+    try:
+        session.connect_router(alias)
+    except RouterProfileNotFoundError:
+        raise CliError(
+            f"Can't reconnect: router '{alias}' isn't in your config anymore. "
+            f"Run /router add to register it again, or /router select to pick a different router."
+        ) from None
+    session.persist_active_selection()
+    console.print(f"[green]Connected to '{alias}'.[/green]")
+
+
 async def _cmd_rewind(arg: str, session: ChatSession, console: Console) -> None:
-    """Pick a point in the current session's conversation (arrow keys,
-    Enter, Esc to cancel) and roll the router config back to match that
-    point, undoing every plan executed after it."""
+    """Pick a past user message (arrow keys, Enter, Esc to cancel) and
+    roll the router config back to just before it -- deleting that
+    message and everything after it, then pre-filling the input with its
+    original text so it can be edited and re-sent."""
     if not session.history:
         console.print("[dim](nothing to rewind)[/dim]")
         return
 
+    # Only user turns make sense as rewind targets -- picking an assistant
+    # reply to "rewind to" is meaningless since it wasn't a request.
     choices = [
-        questionary.Choice(
-            title=f"{truncate_label(entry.text)}  ·  {entry.role}",
-            value=idx,
-        )
+        questionary.Choice(title=truncate_label(entry.text), value=idx)
         for idx, entry in enumerate(session.history)
-        if entry.message_id is not None
+        if entry.role == "user" and entry.message_id is not None
     ]
     if not choices:
         console.print("[dim](nothing to rewind)[/dim]")
@@ -223,7 +317,7 @@ async def _cmd_rewind(arg: str, session: ChatSession, console: Console) -> None:
 
     selected_idx = await wizard._ask(
         questionary.select(
-            "Rewind router config to this point:",
+            "Rewind to just before this message (it will be deleted and refillable):",
             choices=choices,
             style=wizard._WIZARD_STYLE,
             qmark="◈",
@@ -233,11 +327,26 @@ async def _cmd_rewind(arg: str, session: ChatSession, console: Console) -> None:
     if selected_idx is None:
         return  # cancelled (Esc)
 
-    target_message_id = session.history[selected_idx].message_id
+    selected_entry = session.history[selected_idx]
+    # Anchor is the message *before* the selected one, so rewind_to()
+    # deletes the selected entry itself along with everything after it.
+    # Index 0 has nothing before it -- message_id=0 rolls back every
+    # backup for the session (no real row id is <= 0).
+    anchor_message_id = 0
+    if selected_idx > 0:
+        anchor_entry = session.history[selected_idx - 1]
+        anchor_message_id = anchor_entry.message_id if anchor_entry.message_id is not None else 0
+
+    confirm_prompt = "This will roll back the router's actual configuration to match this point. Continue?"
+    if anchor_message_id == 0:
+        confirm_prompt = (
+            "This rewinds to the very beginning of the session, undoing EVERY "
+            "change made in it. This cannot be undone. Continue?"
+        )
 
     confirmed = await wizard._ask(
         questionary.confirm(
-            "This will roll back the router's actual configuration to match this point. Continue?",
+            confirm_prompt,
             default=False,
             style=wizard._WIZARD_STYLE,
             qmark="⚠️ ",
@@ -250,22 +359,26 @@ async def _cmd_rewind(arg: str, session: ChatSession, console: Console) -> None:
 
     try:
         with status_spinner("Rewinding router configuration..."):
-            result = await session.rewind_to(target_message_id)
+            result = await session.rewind_to(anchor_message_id)
     except RewindError as exc:
         console.print(f"[yellow]{escape(str(exc))}[/yellow]")
         return
 
-    if result.attempted == 0:
-        console.print("[dim]Nothing to undo after this point.[/dim]")
-    elif result.stopped_early:
+    if result.stopped_early:
         console.print(
             f"[yellow]Rewind stopped after {result.succeeded}/{result.attempted} step(s) — "
             f"the router may be in a partially rolled-back state. Check /inspect to verify.[/yellow]"
         )
         for err in result.errors:
             console.print(f"[red]  - {escape(err)}[/red]")
+        return  # history wasn't trimmed, so no draft to fill either
+
+    if result.attempted == 0:
+        console.print("[dim]Nothing to undo after this point.[/dim]")
     else:
         console.print(f"[green]Rewound successfully ({result.succeeded} change(s) undone).[/green]")
+
+    session.pending_draft = selected_entry.text
 
 
 async def _cmd_model(arg: str, session: ChatSession, console: Console) -> None:
@@ -330,6 +443,7 @@ async def _cmd_router(arg: str, session: ChatSession, console: Console) -> None:
                 return
             alias = choice
         if session.router_alias != alias:
+            console.clear()
             session.start_new_session(router_alias=alias)
         session.connect_router(alias)
         session.persist_active_selection()
@@ -437,6 +551,7 @@ async def _add_router(session: ChatSession, console: Console) -> None:
     )
     session.config.routers[alias] = profile
     cli_config.save_config(session.config, session.config_path)
+    console.clear()
     session.start_new_session(router_alias=alias)
     session.connect_router(alias)
     session.persist_active_selection()
@@ -545,4 +660,5 @@ _HANDLERS = {
     "/status": _cmd_status,
     "/backup": _cmd_backup,
     "/reset": _cmd_reset,
+    "/connect": _cmd_connect,
 }

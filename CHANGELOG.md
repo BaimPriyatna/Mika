@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-09-03
+
+### Added
+- **Full session resume** — `/history` now replays each turn's original rendered output (advice options, inspection view, troubleshoot diagnosis, execution summary + diff) instead of a flat text dump, backed by a new `render_kind`/`render_payload` schema on stored messages. Legacy sessions from before this release replay as plain text, since their original payload was never captured.
+- After opening a session via `/history`, a non-blocking warning appears if its router isn't currently reachable — worded differently depending on the cause: removed from your config entirely ("no longer exists", fix: `/router add`) versus still registered but not the live connection ("is not connected", fix: `/connect` or `/router select`).
+- `/connect` — reconnect to the router a session is scoped to, using its already-stored credentials, without re-running the setup wizard.
+- Switching routers (`/router select <alias>` or `/router add`) now clears the screen before starting the new router's session, so the previous router's conversation doesn't linger alongside the new one.
+- `/rewind` now pre-fills the input with the original text of the message you rewound to, ready to edit and resend.
+
+### Fixed
+- **`/rewind` semantics were backwards**: selecting a message used to *keep* it and only undo what came after — so rewinding to a request didn't actually undo that request. Selecting a message now deletes it and everything after it, rolling the router back to the state just before it, matching what "rewind to this point" should mean. The picker also now only offers your own messages as rewind targets (an assistant reply was never a meaningful thing to "rewind to").
+- Rewinding to the very first message in a session (undoing everything) now gets a distinctly stronger confirmation prompt, since it's fully destructive and irreversible.
+- The "nothing to undo on the router" rewind case used to skip trimming conversation history entirely, leaving it out of sync with what `/rewind` had just told you happened. It now trims correctly in that case too.
+- Several assistant turns (advise, troubleshoot, and every successful router change) were being recorded **twice** in conversation history due to a leftover generic log line firing before each branch's own entry. Inspection requests, on the other hand, recorded **no** history entry at all. Every turn now records exactly one entry, and troubleshoot entries store the actual diagnosis instead of a placeholder.
+- Resuming an old session tied to a different router than the one currently connected no longer silently keeps using the old router's live connection — it's dropped, so you're prompted to reconnect before any router action can run against the wrong device.
+
 ## [0.2.6] - 2026-08-30
 
 ### Fixed

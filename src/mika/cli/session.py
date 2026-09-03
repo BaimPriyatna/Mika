@@ -68,6 +68,8 @@ class HistoryEntry:
     role: str
     text: str
     message_id: int | None = None
+    render_kind: str = "plain"
+    render_payload: str | None = None
 
 
 @dataclass
@@ -103,6 +105,7 @@ class ChatSession:
 
     last_plan: Plan | None = None
     last_backup: PlanBackup | None = None
+    pending_draft: str | None = None
 
 
     @classmethod
@@ -237,11 +240,24 @@ class ChatSession:
         cli_config.save_config(self.config, self.config_path)
 
 
-    def add_history(self, role: str, text: str) -> int | None:
+    def add_history(
+        self,
+        role: str,
+        text: str,
+        render_kind: str = "plain",
+        render_payload: str | None = None,
+    ) -> int | None:
         message_id = None
         if self.session_store is not None and self.session_id is not None:
-            message_id = self.session_store.add_message(self.session_id, role, text)
-        self.history.append(HistoryEntry(role=role, text=text, message_id=message_id))
+            message_id = self.session_store.add_message(
+                self.session_id, role, text, render_kind=render_kind, render_payload=render_payload
+            )
+        self.history.append(
+            HistoryEntry(
+                role=role, text=text, message_id=message_id,
+                render_kind=render_kind, render_payload=render_payload,
+            )
+        )
         if len(self.history) > _MAX_HISTORY:
             del self.history[: len(self.history) - _MAX_HISTORY]
         return message_id
@@ -271,19 +287,37 @@ class ChatSession:
             effective_alias = self.router_alias if router_alias is _UNSET else router_alias
             self.session_id = self.session_store.create_session(router_alias=effective_alias)
 
-    def resume_session(self, session_id: str) -> int:
+    def resume_session(self, session_id: str, router_alias: str | None | object = _UNSET) -> int:
         """Load a past session's messages into current in-memory history and
         continue appending new messages to that same session. Returns the
-        number of messages loaded."""
+        number of messages loaded.
+
+        `router_alias`: the router this session is scoped to (from the
+        /history picker). If given and it differs from the currently
+        connected router, the live connection is dropped (router_client
+        set to None) rather than left silently pointing at the wrong
+        router -- callers must reconnect explicitly (/connect or
+        /router select) before running any router action. Omit this for
+        callers that don't track per-session router scope; router_alias
+        and router_client are then left untouched."""
         if self.session_store is None:
             raise SessionNotFoundError("No session store available.")
         if not self.session_store.session_exists(session_id):
             raise SessionNotFoundError(f"No session found matching '{session_id}'.")
         messages = self.session_store.get_messages(session_id)
-        self.history = [HistoryEntry(role=m.role, text=m.text, message_id=m.id) for m in messages]
+        self.history = [
+            HistoryEntry(
+                role=m.role, text=m.text, message_id=m.id,
+                render_kind=m.render_kind, render_payload=m.render_payload,
+            )
+            for m in messages
+        ]
         if len(self.history) > _MAX_HISTORY:
             del self.history[: len(self.history) - _MAX_HISTORY]
         self.session_id = session_id
+        if router_alias is not _UNSET and router_alias != self.router_alias:
+            self.router_alias = router_alias
+            self.router_client = None
         return len(messages)
 
     async def rewind_to(self, message_id: int) -> "RewindResult":
@@ -292,12 +326,21 @@ class ChatSession:
         recorded after that point (most recent first). Stops at the first
         failed rollback rather than continuing past it. On full success,
         trims in-memory and persisted history after `message_id` so future
-        state stays consistent with the rolled-back config."""
+        state stays consistent with the rolled-back config.
+
+        `message_id=0` rolls back every backup ever recorded for this
+        session (there being no valid row id below 1), matching the
+        rewind-to-the-very-start case."""
         if self.backup_store is None or self.session_id is None:
             raise RewindError("Backup storage is not available.")
 
         stored = self.backup_store.list_backups_after(self.session_id, message_id)
         if not stored:
+            # Nothing to undo on the router, but the conversation still
+            # needs trimming to anchor it to this point.
+            if self.session_store is not None:
+                self.session_store.trim_after(self.session_id, message_id)
+                self.history = [h for h in self.history if h.message_id is None or h.message_id <= message_id]
             return RewindResult(attempted=0, succeeded=0, stopped_early=False, errors=[])
 
         router_alias = stored[-1].router_alias

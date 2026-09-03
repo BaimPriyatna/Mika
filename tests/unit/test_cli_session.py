@@ -356,3 +356,89 @@ def test_resume_session_unknown_id_raises(session_with_mock_router):
     session = session_with_mock_router
     with pytest.raises(SessionNotFoundError):
         session.resume_session("does-not-exist")
+
+
+def test_resume_session_different_router_drops_stale_connection(session_with_mock_router):
+    """Resuming a session scoped to a *different* router than the one
+    currently connected must drop the live connection rather than leave
+    router_client silently pointing at the wrong router."""
+    session = session_with_mock_router
+    session.connect_router("mock-router")
+    session.add_history("user", "hello from mock-router")
+    old_id = session.session_id
+
+    session.start_new_session(router_alias="other-router")
+    session.add_history("user", "hello from other-router")
+
+    session.resume_session(old_id, router_alias="mock-router")
+
+    assert session.router_alias == "mock-router"
+    # router_client wasn't touched because it's already the right router.
+    assert session.router_client is not None
+
+
+def test_resume_session_switching_to_different_router_clears_client(session_with_mock_router):
+    """If the session being resumed belongs to a router other than the one
+    currently connected, the stale connection must be dropped so no router
+    action can silently run against the wrong device."""
+    session = session_with_mock_router
+    session.connect_router("mock-router")
+    old_id = session.session_id
+    session.add_history("user", "hello")
+
+    # Simulate having since connected to a different router.
+    session.router_alias = "some-other-router"
+
+    session.resume_session(old_id, router_alias="mock-router")
+
+    assert session.router_alias == "mock-router"
+    assert session.router_client is None
+
+
+def test_resume_session_without_router_alias_arg_leaves_connection_untouched(session_with_mock_router):
+    """Callers that don't pass router_alias (default _UNSET) keep the old
+    behavior: router_alias/router_client are never touched by resume."""
+    session = session_with_mock_router
+    session.connect_router("mock-router")
+    old_id = session.session_id
+    session.add_history("user", "hello")
+    session.start_new_session()
+
+    session.resume_session(old_id)
+
+    assert session.router_alias == "mock-router"
+    assert session.router_client is not None
+
+
+@pytest.mark.asyncio
+async def test_rewind_to_no_backups_still_trims_history(session_with_mock_router):
+    """When there's nothing to undo on the router (no plan backups after
+    the anchor), rewind_to() must still trim history to that point --
+    matching the /rewind 'no backups' edge case."""
+    session = session_with_mock_router
+    session.connect_router("mock-router")
+    session.add_history("user", "first")
+    anchor_id = session.history[-1].message_id
+    session.add_history("assistant", "reply")
+    session.add_history("user", "second")
+
+    result = await session.rewind_to(anchor_id)
+
+    assert result.attempted == 0
+    assert [h.text for h in session.history] == ["first"]
+    assert session.session_store.get_messages(session.session_id)[-1].text == "first"
+
+
+@pytest.mark.asyncio
+async def test_rewind_to_message_id_zero_trims_everything(session_with_mock_router):
+    """message_id=0 is the 'rewind to the very start' anchor -- every
+    history entry (real ids start at 1) must be trimmed away."""
+    session = session_with_mock_router
+    session.connect_router("mock-router")
+    session.add_history("user", "first")
+    session.add_history("assistant", "reply")
+
+    result = await session.rewind_to(0)
+
+    assert result.attempted == 0
+    assert session.history == []

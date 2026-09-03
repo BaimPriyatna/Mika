@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, Mock
+
+import pytest
 from prompt_toolkit.document import Document
 
-from mika.cli.input import _COMMANDS, MikaCompleter, build_prompt_session
+from mika.cli.input import _COMMANDS, MikaCompleter, build_prompt_session, read_line
 
 
 def _get_completions(text: str) -> list[str]:
@@ -83,3 +86,27 @@ def test_every_slash_command_has_a_completer_entry():
         f"Commands registered in _HANDLERS but missing from input._COMMANDS "
         f"(won't tab-complete): {sorted(missing_from_completer)}"
     )
+
+
+@pytest.mark.asyncio
+async def test_read_line_passes_default_to_prompt_async():
+    """/rewind's draft auto-fill relies on read_line forwarding `default`
+    straight into PromptSession.prompt_async so the text is pre-filled
+    and editable, not just a placeholder."""
+    prompt_session = Mock()
+    prompt_session.prompt_async = AsyncMock(return_value="edited text")
+
+    result = await read_line(prompt_session, default="original draft")
+
+    prompt_session.prompt_async.assert_called_once_with(default="original draft")
+    assert result == "edited text"
+
+
+@pytest.mark.asyncio
+async def test_read_line_defaults_to_empty_string():
+    prompt_session = Mock()
+    prompt_session.prompt_async = AsyncMock(return_value="typed")
+
+    await read_line(prompt_session)
+
+    prompt_session.prompt_async.assert_called_once_with(default="")

@@ -41,6 +41,8 @@ class SessionMessage:
     role: str
     text: str
     created_at: str
+    render_kind: str = "plain"
+    render_payload: str | None = None
 
 
 class SessionStore:
@@ -75,6 +77,23 @@ class SessionStore:
                 ON session_messages(session_id)
             """)
             conn.commit()
+            self._migrate(conn)
+
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        """Add columns introduced after the initial CREATE TABLE. Each
+        ALTER TABLE is wrapped since SQLite has no "ADD COLUMN IF NOT
+        EXISTS" -- a duplicate-column OperationalError means a previous
+        run (or another concurrent process) already applied it."""
+        for ddl in (
+            "ALTER TABLE session_messages ADD COLUMN render_kind TEXT NOT NULL DEFAULT 'plain'",
+            "ALTER TABLE session_messages ADD COLUMN render_payload TEXT",
+        ):
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
+        conn.commit()
 
     def create_session(self, router_alias: str | None = None) -> str:
         session_id = str(uuid.uuid4())
@@ -87,14 +106,27 @@ class SessionStore:
             conn.commit()
         return session_id
 
-    def add_message(self, session_id: str, role: str, text: str) -> int:
+    def add_message(
+        self,
+        session_id: str,
+        role: str,
+        text: str,
+        render_kind: str = "plain",
+        render_payload: str | None = None,
+    ) -> int:
         """Persist a message and return its row id (used to anchor rewind
-        points and plan backups to a precise point in the conversation)."""
+        points and plan backups to a precise point in the conversation).
+
+        `render_kind`/`render_payload` capture enough structure to replay
+        the original rendered output (e.g. advice options, inspect
+        target) on /history resume -- `text` alone stays a plain
+        description for search and AI context."""
         now = datetime.now(timezone.utc).isoformat()
         with db.connect(self.db_path) as conn:
             cursor = conn.execute(
-                "INSERT INTO session_messages (session_id, role, text, created_at) VALUES (?, ?, ?, ?)",
-                (session_id, role, text, now),
+                "INSERT INTO session_messages (session_id, role, text, created_at, render_kind, render_payload) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (session_id, role, text, now, render_kind, render_payload),
             )
             message_id = cursor.lastrowid
             # Keep the session's title as its first user message, and bump updated_at.
@@ -178,12 +210,22 @@ class SessionStore:
         ]
 
     def get_messages(self, session_id: str, limit: int | None = None) -> list[SessionMessage]:
-        query = "SELECT id, role, text, created_at FROM session_messages WHERE session_id = ? ORDER BY id ASC"
+        query = (
+            "SELECT id, role, text, created_at, render_kind, render_payload "
+            "FROM session_messages WHERE session_id = ? ORDER BY id ASC"
+        )
         with db.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(query, [session_id]).fetchall()
         messages = [
-            SessionMessage(id=r["id"], role=r["role"], text=r["text"], created_at=r["created_at"])
+            SessionMessage(
+                id=r["id"],
+                role=r["role"],
+                text=r["text"],
+                created_at=r["created_at"],
+                render_kind=r["render_kind"],
+                render_payload=r["render_payload"],
+            )
             for r in rows
         ]
         if limit is not None and len(messages) > limit:

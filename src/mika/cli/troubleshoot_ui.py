@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from rich.console import Console
 
 from mika.cli.render import render_diagnosis
@@ -27,6 +29,14 @@ async def run_troubleshoot(problem_description: str, session: ChatSession, conso
         return None
 
     render_diagnosis(console, diagnosis)
+
+    summary = diagnosis.problem_description
+    if diagnosis.recommended_fixes:
+        summary += " | Fixes: " + "; ".join(diagnosis.recommended_fixes)
+    session.add_history(
+        "assistant", summary, render_kind="troubleshoot",
+        render_payload=json.dumps(diagnosis.model_dump(mode="json"), default=str),
+    )
 
     if not diagnosis.recommended_fixes:
         return None

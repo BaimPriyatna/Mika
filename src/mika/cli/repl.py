@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
@@ -31,6 +33,7 @@ from mika.executor.executor import execute_plan
 from mika.executor.rollback import create_backup, rollback_from_backup
 from mika.executor.verification import verify_plan
 from mika.planner.errors import PlannerError
+from mika.planner.diff import generate_diff
 from mika.planner.address import plan_create_address
 from mika.planner.delete_address import plan_delete_address
 from mika.planner.delete_dhcp import plan_delete_dhcp
@@ -83,8 +86,10 @@ async def run_repl(session: ChatSession, console: Console | None = None) -> None
     prompt_session = build_prompt_session(session)
 
     while True:
+        draft = session.pending_draft or ""
+        session.pending_draft = None
         try:
-            line = await read_line(prompt_session)
+            line = await read_line(prompt_session, default=draft)
             cleanup_scroll_history(line)
         except (EOFError, KeyboardInterrupt):
             console.print()
@@ -136,6 +141,12 @@ def _print_startup_status(session: ChatSession, console: Console) -> None:
         log_warning("No active AI provider. Use /provider to set up.")
 
 
+def _payload(data: dict) -> str:
+    """Serialize a render_payload dict to JSON text (str keys only, so
+    non-JSON-native values like enums are coerced via default=str)."""
+    return json.dumps(data, default=str)
+
+
 async def _handle_chat_turn(request: str, session: ChatSession, console: Console) -> None:
     session.add_history("user", request)
 
@@ -174,10 +185,8 @@ async def _handle_chat_turn(request: str, session: ChatSession, console: Console
             intent = await provider.generate_intent(request, context=ai_context)
     except AIError as exc:
         log_error(f"AI provider error: {exc}")
-        session.add_history("assistant", f"(error) {exc}")
+        session.add_history("assistant", f"(error) {exc}", render_kind="error", render_payload=_payload({"message": str(exc)}))
         return
-
-    session.add_history("assistant", f"intent={intent.intent.value}")
 
     if intent.category == IntentCategory.READ:
         if intent.intent.value == "advise":
@@ -185,25 +194,35 @@ async def _handle_chat_turn(request: str, session: ChatSession, console: Console
             options = getattr(intent, "options", [])
             suggested_action = getattr(intent, "suggested_action", None)
             render.render_advice(console, message, options, suggested_action)
-            session.add_history("assistant", message)
+            session.add_history(
+                "assistant", message, render_kind="advice",
+                render_payload=_payload({"message": message, "options": options, "suggested_action": suggested_action}),
+            )
             return
 
         if intent.intent.value == "troubleshoot":
             from mika.cli.troubleshoot_ui import run_troubleshoot
 
+            # run_troubleshoot records its own history entry (needs the
+            # actual diagnosis, only available inside that function).
             fix_request = await run_troubleshoot(intent.problem_description, session, console)
-            session.add_history("assistant", "(diagnosis shown)")
             if fix_request:
                 await _handle_chat_turn(fix_request, session, console)
             return
 
         target = render.INTENT_TO_TARGET.get(intent.intent.value)
         if target is None:
-            console.print(f"[yellow]Read intent '{escape(intent.intent.value)}' does not have a matching view.[/yellow]")
+            msg = f"Read intent '{intent.intent.value}' does not have a matching view."
+            console.print(f"[yellow]{escape(msg)}[/yellow]")
+            session.add_history("assistant", msg)
             return
         if intent.reasoning:
             console.print(f"\n[bold #c084fc]◆ Mika:[/bold #c084fc] {escape(intent.reasoning)}")
         render.render_inspect(console, target, ctx)
+        session.add_history(
+            "assistant", f"inspected {target}", render_kind="inspect",
+            render_payload=_payload({"target": target, "ctx": ctx.model_dump(mode="json")}),
+        )
         return
 
     if intent.reasoning:
@@ -211,16 +230,20 @@ async def _handle_chat_turn(request: str, session: ChatSession, console: Console
 
     planner_fn = _PLANNERS.get(intent.intent.value)
     if planner_fn is None:
-        console.print(
-            f"[yellow]Intent '{intent.intent.value}' detected, but planner for this "
-            "is not yet implemented. Currently only 'create_hotspot' is supported.[/yellow]"
+        msg = (
+            f"Intent '{intent.intent.value}' detected, but planner for this "
+            "is not yet implemented. Currently only 'create_hotspot' is supported."
         )
+        console.print(f"[yellow]{escape(msg)}[/yellow]")
+        session.add_history("assistant", msg)
         return
 
     try:
         plan = planner_fn(intent, ctx)
     except PlannerError as exc:
-        console.print(f"[red]Plan generation failed: {escape(str(exc))}[/red]")
+        msg = f"Plan generation failed: {exc}"
+        console.print(f"[red]{escape(msg)}[/red]")
+        session.add_history("assistant", msg, render_kind="error", render_payload=_payload({"message": msg}))
         return
 
     try:
@@ -228,14 +251,15 @@ async def _handle_chat_turn(request: str, session: ChatSession, console: Console
             fresh_ctx = await discover(client)
             result = validate(plan, fresh_ctx, session.knowledge_retriever)
     except Exception as exc:
-        log_error(f"Plan validation failed: {exc}")
+        msg = f"Plan validation failed: {exc}"
+        log_error(msg)
+        session.add_history("assistant", msg, render_kind="error", render_payload=_payload({"message": msg}))
         return
 
     if not result.validated:
-        from mika.planner.diff import generate_diff
-
         console.print(generate_diff(result.plan, result, show_data=False))
         console.print("[red]Plan is invalid, cancelled.[/red]")
+        session.add_history("assistant", "Plan is invalid, cancelled.")
         _audit(session, ctx, request, intent.model_dump(), result.plan.model_dump(), outcome=AuditOutcome.FAILED)
         return
 
@@ -245,12 +269,14 @@ async def _handle_chat_turn(request: str, session: ChatSession, console: Console
         confirmation = prompt_for_confirmation(result.plan, result, console)
     except NonInteractiveContextError as exc:
         console.print(f"[red]{escape(str(exc))}[/red]")
+        session.add_history("assistant", str(exc), render_kind="error", render_payload=_payload({"message": str(exc)}))
         return
 
     if confirmation.status != ConfirmationStatus.CONFIRMED:
         if confirmation.feedback:
             console.print(f"\n[cyan]Feedback received:[/cyan] {escape(confirmation.feedback)}")
             console.print("[dim]Re-planning with your requested modifications...[/dim]\n")
+            session.add_history("assistant", f"Feedback received, replanning: {confirmation.feedback}")
             _audit(
                 session,
                 ctx,
@@ -268,6 +294,7 @@ async def _handle_chat_turn(request: str, session: ChatSession, console: Console
             return
 
         console.print("[yellow]Cancelled by user.[/yellow]")
+        session.add_history("assistant", "Cancelled by user.")
         _audit(
             session,
             ctx,
@@ -284,14 +311,18 @@ async def _handle_chat_turn(request: str, session: ChatSession, console: Console
             backup = await create_backup(result.plan, client)
         session.last_backup = backup
     except Exception as exc:
-        log_error(f"Backup creation failed, execution cancelled: {exc}")
+        msg = f"Backup creation failed, execution cancelled: {exc}"
+        log_error(msg)
+        session.add_history("assistant", msg, render_kind="error", render_payload=_payload({"message": msg}))
         return
 
     try:
         with status_spinner("Executing plan..."):
             exec_result = await execute_plan(result.plan, confirmation, client)
     except Exception as exc:
-        log_error(f"Execution failed: {exc}")
+        msg = f"Execution failed: {exc}"
+        log_error(msg)
+        session.add_history("assistant", msg, render_kind="error", render_payload=_payload({"message": msg}))
         _audit(
             session,
             ctx,
@@ -304,7 +335,9 @@ async def _handle_chat_turn(request: str, session: ChatSession, console: Console
         return
 
     if not exec_result.success:
-        console.print(f"[red]Execution failed: {escape(str(exec_result.error or exec_result.summary))}[/red]")
+        msg = f"Execution failed: {exec_result.error or exec_result.summary}"
+        console.print(f"[red]{escape(msg)}[/red]")
+        session.add_history("assistant", msg, render_kind="error", render_payload=_payload({"message": msg}))
         _audit(
             session,
             ctx,
@@ -337,7 +370,16 @@ async def _handle_chat_turn(request: str, session: ChatSession, console: Console
     else:
         log_success("Plan successfully executed and verified.")
 
-    message_id = session.add_history("assistant", exec_result.summary or "(completed)")
+    message_id = session.add_history(
+        "assistant",
+        exec_result.summary or "(completed)",
+        render_kind="execution_summary",
+        render_payload=_payload({
+            "plan_summary": exec_result.summary,
+            "diff": generate_diff(result.plan, result, show_data=False),
+            "outcome": outcome.value,
+        }),
+    )
     if (
         outcome == AuditOutcome.SUCCESS
         and session.backup_store is not None

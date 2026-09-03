@@ -68,6 +68,15 @@ def render_diagnosis(console: Console, diagnosis: DiagnosisResult) -> None:
     console.print(Panel(body, border_style="#7c3aed", padding=(0, 1), expand=False))
 
 
+def render_execution_summary(console: Console, plan_summary: str | None, diff: str, outcome: str) -> None:
+    console.print()
+    if diff:
+        console.print(diff)
+    style = {"success": "green", "rolled_back": "yellow"}.get(outcome, "red")
+    symbol = "✓" if outcome == "success" else "⚠"
+    console.print(f"[{style}]{symbol} {escape(plan_summary or '(completed)')} (outcome: {escape(outcome)})[/{style}]")
+
+
 def render_inspect(console: Console, target: str, ctx: RouterContext) -> None:
     target = target.strip().lower()
     renderer = _RENDERERS.get(target)
