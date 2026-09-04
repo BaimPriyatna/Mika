@@ -116,10 +116,16 @@ def _rows_to_list(rows) -> list[dict]:
 
 
 def _call_sync(api, path: str, **kwargs) -> list[dict]:
-    """Execute a binary API call synchronously and return list of dicts."""
+    """Execute a binary API call synchronously and return list of dicts.
+
+    librouteros' Path.__call__(cmd, /, **kwargs) requires `cmd` as a
+    required positional argument -- there is no implicit default. Every
+    resource read here is a plain listing, so "print" is always the
+    right command (matches what Path.__iter__ does internally: it calls
+    self("print"))."""
     try:
         resource = api.path(*normalize_resource(path).split("/"))
-        return _rows_to_list(resource(**kwargs))
+        return _rows_to_list(resource("print", **kwargs))
     except Exception as exc:
         lib = _import_librouteros()
         if isinstance(exc, lib.exceptions.TrapError):

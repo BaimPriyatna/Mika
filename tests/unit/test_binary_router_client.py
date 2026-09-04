@@ -62,6 +62,11 @@ def test_v6_vs_v7_path_mapping():
 # ---------------------------------------------------------------------------
 
 def _make_api_mock(responses: dict[str, list[dict]]) -> MagicMock:
+    """Build a fake librouteros Api whose Path objects mimic the REAL
+    librouteros.api.Path.__call__(cmd, /, **kwargs) signature -- `cmd` is
+    a required positional argument with no default. A looser mock here
+    is exactly what let a real production bug (calling resource() with
+    no cmd at all) slip through the whole test suite undetected."""
     api = MagicMock()
 
     def _path(*parts):
@@ -69,7 +74,8 @@ def _make_api_mock(responses: dict[str, list[dict]]) -> MagicMock:
         key = "/".join(parts)
         rows = responses.get(key, [])
 
-        def _call(**kwargs):
+        def _call(cmd, **kwargs):
+            assert cmd == "print"  # every _call_sync/_call_one_sync use is a listing
             return rows
 
         resource.side_effect = _call
@@ -209,3 +215,39 @@ async def test_trap_error_handled():
     client = await _make_connected_client(api)
     with pytest.raises(RouterApiError, match="Binary API error"):
         await client.get_routes()
+
+
+@pytest.mark.asyncio
+async def test_call_sync_passes_print_as_required_positional_cmd():
+    """Regression test for a real production bug: librouteros'
+    Path.__call__(cmd, /, **kwargs) has no default for `cmd` -- calling
+    resource(**kwargs) with no positional arg raised
+    'missing 1 required positional argument: cmd' on every single read
+    (system resource, interfaces, addresses, routes, firewall, nat,
+    queues, dhcp, hotspot -- everything), not just the resource whose
+    error happened to win the asyncio.gather() race. Every _call_sync/
+    _call_one_sync call site is a listing, so 'print' must always be
+    passed explicitly."""
+    received_cmds = []
+
+    api = MagicMock()
+
+    def _path(*parts):
+        resource = MagicMock()
+
+        def _call(cmd, **kwargs):
+            received_cmds.append(cmd)
+            return [{"name": "ether1"}]
+
+        resource.side_effect = _call
+        return resource
+
+    api.path = _path
+    api.close = MagicMock()
+
+    client = await _make_connected_client(api)
+    await client.get_interfaces()
+    await client.get_hotspot_servers()
+    await client.get_system_resource()  # goes through _call_one -> _call_sync too
+
+    assert received_cmds == ["print", "print", "print"]

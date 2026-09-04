@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-09-04
+
+### Fixed
+- **Critical**: every read from a real router via the binary API (`/inspect`, and router discovery in general, including the state-fingerprint safety check run before any config change is applied) was broken. `librouteros` 4.2.0 requires an explicit `cmd` argument on every API call with no default; the binary client was calling it with none, raising a `TypeError` on literally every resource read. Because discovery runs all reads concurrently, only one failure ever surfaced to the user (often misleadingly naming `ip/hotspot` regardless of what was actually being inspected). Fixed by always passing `"print"` explicitly.
+
 ## [0.3.0] - 2026-09-03
 
 ### Added
