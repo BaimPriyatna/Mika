@@ -62,13 +62,19 @@ class TestEscapeCancels:
         assert result is None
 
 
-class TestHeaderPrintedOnce:
+class TestNoStandaloneHeaderPrinted:
+    """_ask() used to print a standalone status header (router/provider/
+    model) via console.print() right before opening the picker. That
+    header always landed between the already-echoed command line and the
+    picker itself -- never above the command, where a status bar
+    belongs -- and its raw-ANSI rendering broke on terminals without VT
+    processing enabled (e.g. plain Windows Command Prompt). It's been
+    removed entirely: the status bar shown above the main "> " prompt
+    while typing already covers this, correctly positioned, with no
+    raw-ANSI codes involved."""
+
     @pytest.mark.asyncio
-    async def test_header_printed_exactly_once_before_prompt(self):
-        """Regression: an earlier attempt printed the header from inside a
-        render/key-binding callback, which reprinted it on every arrow-key
-        press. The header must be printed exactly once, before the prompt
-        starts -- never tied to navigation events."""
+    async def test_ask_never_prints_anything_regardless_of_navigation(self):
         session = Mock(router_alias="office", provider_name="gemini", model_name="gemini-1.5-flash")
         with create_pipe_input() as pipe_input:
             q = questionary.select(
@@ -77,8 +83,6 @@ class TestHeaderPrintedOnce:
                 input=pipe_input,
                 output=DummyOutput(),
             )
-            # Simulate a user navigating up/down several times before
-            # confirming -- the header must still only appear once.
             pipe_input.send_text("\x1b[B\x1b[B\x1b[A\r")  # down, down, up, enter
 
             printed = []
@@ -91,7 +95,7 @@ class TestHeaderPrintedOnce:
             finally:
                 wizard_module.console.print = original_print
 
-        assert len(printed) == 1
+        assert printed == []
 
     @pytest.mark.asyncio
     async def test_no_header_printed_when_session_is_none(self):

@@ -11,6 +11,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -251,3 +252,50 @@ async def test_call_sync_passes_print_as_required_positional_cmd():
     await client.get_system_resource()  # goes through _call_one -> _call_sync too
 
     assert received_cmds == ["print", "print", "print"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_reads_are_serialized_not_interleaved():
+    """Regression test for a real production bug: librouteros wraps a
+    single synchronous TCP socket, which is not safe for concurrent use.
+    discover() issues many reads concurrently via asyncio.gather(), each
+    dispatched to a worker thread -- without serializing access to the
+    shared connection, overlapping requests corrupt the protocol's
+    request/response framing. Symptom in production: the first call
+    after connecting sometimes survived the race, but every call after
+    that hung until it timed out. This asserts that concurrent reads
+    never overlap -- each one fully completes (including a simulated
+    slow response) before the next one starts."""
+    import asyncio
+
+    api = MagicMock()
+    concurrent_count = 0
+    max_concurrent = 0
+
+    def _path(*parts):
+        resource = MagicMock()
+
+        def _call(cmd, **kwargs):
+            nonlocal concurrent_count, max_concurrent
+            concurrent_count += 1
+            max_concurrent = max(max_concurrent, concurrent_count)
+            time.sleep(0.02)  # simulate a slow synchronous socket round-trip
+            concurrent_count -= 1
+            return [{"name": "/".join(parts)}]
+
+        resource.side_effect = _call
+        return resource
+
+    api.path = _path
+    api.close = MagicMock()
+
+    client = await _make_connected_client(api)
+    await asyncio.gather(
+        client.get_interfaces(),
+        client.get_addresses(),
+        client.get_routes(),
+        client.get_firewall_rules(),
+        client.get_hotspot_servers(),
+    )
+
+    assert max_concurrent == 1

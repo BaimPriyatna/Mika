@@ -146,23 +146,6 @@ def build_status_bar(session: ChatSession) -> str:
     return f"MIKA | router: {router_info} | model: {model_info}"
 
 
-def build_header_status(session: ChatSession) -> str:
-    if session.router_alias:
-        router_part = f"\033[38;2;34;197;94m{session.router_alias}\033[0m"
-    else:
-        router_part = "\033[38;2;248;113;113mnone\033[0m"
-
-    if session.provider_name and session.model_name:
-        model_part = f"\033[38;2;34;197;94m{session.provider_name}:{session.model_name}\033[0m"
-    else:
-        model_part = "\033[38;2;248;113;113mnone\033[0m"
-
-    brand = "\033[38;2;192;132;252m◈ MIKA\033[0m"
-    sep = "\033[38;2;61;61;61m│\033[0m"
-    
-    return f" {brand}  {sep}  router: {router_part}  {sep}  model: {model_part} "
-
-
 def build_prompt_message(session: ChatSession | None = None) -> callable:
     try:
         from rich import get_console

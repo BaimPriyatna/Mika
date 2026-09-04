@@ -177,6 +177,16 @@ class BinaryRouterClient:
         self._timeout = timeout
         self._major_version = major_version
         self._api = None
+        # librouteros' Api wraps a single synchronous TCP socket -- it is
+        # not safe for concurrent use. discover() issues many reads
+        # concurrently via asyncio.gather(), each dispatched to a worker
+        # thread via asyncio.to_thread(); without serializing access here,
+        # multiple threads write/read the same socket at once, desyncing
+        # the protocol's request/response framing. The symptom is exactly
+        # what happened in production: the first call after connecting
+        # sometimes survives the race, but every call after that hangs
+        # until it times out, since the read buffer is now out of sync.
+        self._lock = asyncio.Lock()
 
     async def _ensure_connected(self):
         """Lazily establish the binary API connection on first use."""
@@ -213,13 +223,14 @@ class BinaryRouterClient:
         await self.aclose()
 
     async def aclose(self) -> None:
-        if self._api is not None:
-            try:
-                await asyncio.to_thread(self._api.close)
-            except Exception:
-                pass
-            finally:
-                self._api = None
+        async with self._lock:
+            if self._api is not None:
+                try:
+                    await asyncio.to_thread(self._api.close)
+                except Exception:
+                    pass
+                finally:
+                    self._api = None
 
     def _resolve_path(self, resource: str) -> str:
         """Resolve the appropriate path according to router major version."""
@@ -233,7 +244,8 @@ class BinaryRouterClient:
         await self._ensure_connected()
         resolved_path = self._resolve_path(path)
         try:
-            return await asyncio.to_thread(_call_sync, self._api, resolved_path, **kwargs)
+            async with self._lock:
+                return await asyncio.to_thread(_call_sync, self._api, resolved_path, **kwargs)
         except (RouterApiError, RouterAuthenticationError, RouterConnectionError, RouterTimeoutError):
             raise
         except Exception as exc:
@@ -243,7 +255,8 @@ class BinaryRouterClient:
         await self._ensure_connected()
         resolved_path = self._resolve_path(path)
         try:
-            return await asyncio.to_thread(_call_one_sync, self._api, resolved_path)
+            async with self._lock:
+                return await asyncio.to_thread(_call_one_sync, self._api, resolved_path)
         except (RouterApiError, RouterAuthenticationError, RouterConnectionError, RouterTimeoutError):
             raise
         except Exception as exc:
@@ -306,7 +319,8 @@ class BinaryRouterClient:
                     raise RouterApiError(f"Binary API add failed on {target_path!r}: {exc}") from exc
                 raise RouterApiError(f"Unexpected add error on {target_path!r}: {exc}") from exc
 
-        return await asyncio.to_thread(_do_add)
+        async with self._lock:
+            return await asyncio.to_thread(_do_add)
 
     async def update_resource(self, resource: str, resource_id: str, data: dict) -> dict:
         """Update an existing resource entry via binary API (equivalent to PATCH in REST)."""
@@ -329,7 +343,8 @@ class BinaryRouterClient:
                     raise RouterApiError(f"Binary API update failed on {target_path!r}: {exc}") from exc
                 raise RouterApiError(f"Unexpected update error on {target_path!r}: {exc}") from exc
 
-        return await asyncio.to_thread(_do_update)
+        async with self._lock:
+            return await asyncio.to_thread(_do_update)
 
     async def delete_resource(self, resource: str, resource_id: str) -> None:
         """Delete a resource entry via binary API (equivalent to DELETE in REST)."""
@@ -351,4 +366,5 @@ class BinaryRouterClient:
                     raise RouterApiError(f"Binary API remove failed on {target_path!r}: {exc}") from exc
                 raise RouterApiError(f"Unexpected remove error on {target_path!r}: {exc}") from exc
 
-        await asyncio.to_thread(_do_remove)
+        async with self._lock:
+            await asyncio.to_thread(_do_remove)

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-09-04
+
+### Fixed
+- The status header shown before an interactive picker (`/inspect`, `/router select`, etc.) rendered as raw, unreadable escape-code text on terminals without full ANSI support, such as plain Windows Command Prompt. It's been removed rather than repaired: the status bar already shown above the main input prompt while typing covers the same information, correctly positioned and rendered.
+- **Critical**: router discovery (and therefore every `/inspect`, and the pre-execution state check run before any config change) could hang and eventually time out on the second and later attempts within the same session. The binary API connection is a single socket shared by all concurrent reads; without serializing access to it, overlapping reads corrupted the connection's read buffer, so the first read after connecting sometimes worked by chance while every read after it hung.
+
 ## [0.3.2] - 2026-09-04
 
 ### Fixed

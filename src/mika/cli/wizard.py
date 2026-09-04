@@ -19,7 +19,6 @@ from mika.ai.provider_registry import (
 from mika.cli import config as cli_config
 from mika.cli import env_secrets
 from mika.cli.errors import CliError
-from mika.cli.input import build_header_status
 from mika.router.mndp import MndpDevice, scan as mndp_scan
 
 if TYPE_CHECKING:
@@ -44,27 +43,25 @@ _WIZARD_STYLE = questionary.Style(
 
 
 async def _ask(question: questionary.Question, session: "ChatSession | None" = None) -> object:
-    """Run any questionary prompt (select/confirm/text/password) with two
-    fixes applied consistently everywhere, instead of ad-hoc per call site:
+    """Run any questionary prompt (select/confirm/text/password) with a
+    fix applied consistently everywhere, instead of ad-hoc per call site:
 
-    1. Escape cancels, same as Ctrl+C/Ctrl+Q (questionary only binds those
-       two by default -- Escape does nothing on its own, even though the
-       status line has always told the user "Esc cancel").
-    2. The status header (router/provider/model) is printed to the
-       console exactly ONCE, immediately before the prompt starts
-       rendering -- not on every keystroke or re-render. Printing it from
-       inside a key binding or render callback (tried previously) causes
-       it to reprint on every arrow-key press, since those fire on every
-       navigation event; a plain one-shot console.print() before
-       `ask_async()` avoids that entirely, because questionary's own
-       render loop repaints only its own prompt area, leaving whatever
-       was printed before it untouched in the scrollback.
+    Escape cancels, same as Ctrl+C/Ctrl+Q (questionary only binds those
+    two by default -- Escape does nothing on its own, even though the
+    status line has always told the user "Esc cancel").
+
+    `session` is accepted for backward compatibility with existing call
+    sites but is otherwise unused: an earlier version of this function
+    also printed a standalone status header here, but that header is
+    printed *after* the triggering command line has already been echoed
+    to the terminal, so it could only ever land between the command and
+    the picker -- never above the command, where a status bar belongs.
+    The status bar shown above the main "> " prompt while typing already
+    covers that; this function doesn't need its own.
     """
     extra_bindings = KeyBindings()
     extra_bindings.add(Keys.Escape, eager=True)(lambda event: event.app.exit(result=None))
     question.application.key_bindings = merge_key_bindings([question.application.key_bindings, extra_bindings])
-    if session is not None:
-        console.print(build_header_status(session))
     return await question.ask_async()
 
 
