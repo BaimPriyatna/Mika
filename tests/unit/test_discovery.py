@@ -150,6 +150,49 @@ class TestDiscovery:
         assert ctx.capabilities.supports_wireguard is False
 
 
+class TestRawIntWordCoercion:
+    """librouteros auto-detects word types on the wire: a purely-numeric
+    RouterOS value (e.g. a single dst-port like "80") comes back as a
+    Python int, not str, even though these fields are always strings in
+    RouterOS config. discover() must coerce every optional string field
+    rather than pass raw router data straight into a str | None field --
+    this reproduces a real production crash on a firewall rule with a
+    single numeric dst-port."""
+
+    @pytest.mark.asyncio
+    async def test_numeric_dst_port_is_coerced_to_str(self):
+        profile = hex_profile()
+        profile.firewall_rules.append({
+            ".id": "*99", "chain": "input", "action": "accept",
+            "dst-port": 64872,  # librouteros returns this as int, not "64872"
+        })
+        client = MockRouterClient(profile)
+        ctx = await discover(client)
+
+        rule = [r for r in ctx.firewall_rules if r.id == "*99"][0]
+        assert rule.dst_port == "64872"
+        assert isinstance(rule.dst_port, str)
+
+    @pytest.mark.asyncio
+    async def test_numeric_comment_and_mac_and_max_limit_are_coerced(self):
+        """Same class of bug can hit any optional string field that
+        happens to look purely numeric -- comment, mac-address (unlikely
+        but possible with certain formats), queue max-limit, etc."""
+        profile = hex_profile()
+        profile.interfaces.append({
+            ".id": "*99", "name": "ether9", "type": "ether", "comment": 12345,
+        })
+        profile.queues.append({
+            ".id": "*1", "name": "q1", "target": "192.168.88.0/24", "max-limit": 10000000,
+        })
+        client = MockRouterClient(profile)
+        ctx = await discover(client)
+
+        iface = ctx.get_interface("ether9")
+        assert iface.comment == "12345"
+        assert ctx.queues[0].max_limit == "10000000"
+
+
 class TestRouterContextHelpers:
 
     @pytest.mark.asyncio

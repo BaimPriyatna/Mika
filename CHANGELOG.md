@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-09-04
+
+### Fixed
+- **Critical**: router discovery (and therefore `/inspect`, and the pre-execution state-fingerprint safety check) crashed entirely whenever any optional text field on the router came back looking like a number — most commonly a firewall rule's `dst-port` when it's a single port (e.g. `80`) rather than a range or list. The binary API library decodes such values as integers on the wire even though RouterOS always treats them as strings, and that integer was passed straight into a field that only accepts text, so discovery aborted immediately with a validation error instead of ignoring the one field it didn't need to touch. All affected fields (rule comments, MAC addresses, protocols, ports, queue limits, lease times, and more) are now normalized to text before use.
+
 ## [0.3.1] - 2026-09-04
 
 ### Fixed

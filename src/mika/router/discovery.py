@@ -46,6 +46,18 @@ def _parse_int(val: Any, default: int | None = None) -> int | None:
         return default
 
 
+def _parse_str(val: Any) -> str | None:
+    """Coerce an optional field to str | None.
+
+    librouteros auto-detects word types on the wire: a value that looks
+    purely numeric (e.g. a single dst-port like "80") comes back as a
+    Python int, not str, even though these fields are always strings in
+    RouterOS config (ports can also be ranges/lists like "80-90" or
+    "80,443"). Every optional string field from raw router data must go
+    through this rather than being passed as-is."""
+    return None if val is None else str(val)
+
+
 class SystemResource(BaseModel):
 
     model_config = ConfigDict(frozen=True)
@@ -357,7 +369,7 @@ async def discover(client: RouterClient) -> RouterContext:
         version=str(raw_sys.get("version", "unknown")),
         board_name=str(raw_sys.get("board-name", raw_sys.get("platform", "unknown"))),
         architecture_name=str(raw_sys.get("architecture-name", "unknown")),
-        cpu=raw_sys.get("cpu"),
+        cpu=_parse_str(raw_sys.get("cpu")),
         cpu_count=_parse_int(raw_sys.get("cpu-count"), default=1) or 1,
         cpu_frequency=_parse_int(raw_sys.get("cpu-frequency")),
         cpu_load=_parse_int(raw_sys.get("cpu-load")),
@@ -366,7 +378,7 @@ async def discover(client: RouterClient) -> RouterContext:
         free_hdd_space=_parse_int(raw_sys.get("free-hdd-space")),
         total_hdd_space=_parse_int(raw_sys.get("total-hdd-space")),
         uptime=str(raw_sys.get("uptime", "0s")),
-        platform=raw_sys.get("platform"),
+        platform=_parse_str(raw_sys.get("platform")),
     )
 
     capabilities = detect_capabilities(raw_sys, raw_ifaces)
@@ -381,11 +393,11 @@ async def discover(client: RouterClient) -> RouterContext:
                 type=item_type,
                 running=_parse_bool(item.get("running"), default=True),
                 disabled=_parse_bool(item.get("disabled"), default=False),
-                comment=item.get("comment"),
-                mac_address=item.get("mac-address"),
+                comment=_parse_str(item.get("comment")),
+                mac_address=_parse_str(item.get("mac-address")),
                 mtu=_parse_int(item.get("mtu"), default=1500),
                 vlan_id=_parse_int(item.get("vlan-id")) if item_type == "vlan" else None,
-                vlan_parent=item.get("interface") if item_type == "vlan" else None,
+                vlan_parent=_parse_str(item.get("interface")) if item_type == "vlan" else None,
             )
         )
 
@@ -398,7 +410,7 @@ async def discover(client: RouterClient) -> RouterContext:
                 network=str(item.get("network", "")),
                 interface=str(item.get("interface", "")),
                 disabled=_parse_bool(item.get("disabled"), default=False),
-                comment=item.get("comment"),
+                comment=_parse_str(item.get("comment")),
             )
         )
 
@@ -424,14 +436,14 @@ async def discover(client: RouterClient) -> RouterContext:
                 chain=str(item.get("chain", "forward")),
                 action=str(item.get("action", "accept")),
                 disabled=_parse_bool(item.get("disabled"), default=False),
-                comment=item.get("comment"),
-                in_interface=item.get("in-interface"),
-                out_interface=item.get("out-interface"),
-                src_address=item.get("src-address"),
-                dst_address=item.get("dst-address"),
-                protocol=item.get("protocol"),
-                dst_port=item.get("dst-port"),
-                connection_state=item.get("connection-state"),
+                comment=_parse_str(item.get("comment")),
+                in_interface=_parse_str(item.get("in-interface")),
+                out_interface=_parse_str(item.get("out-interface")),
+                src_address=_parse_str(item.get("src-address")),
+                dst_address=_parse_str(item.get("dst-address")),
+                protocol=_parse_str(item.get("protocol")),
+                dst_port=_parse_str(item.get("dst-port")),
+                connection_state=_parse_str(item.get("connection-state")),
             )
         )
 
@@ -443,12 +455,12 @@ async def discover(client: RouterClient) -> RouterContext:
                 chain=str(item.get("chain", "srcnat")),
                 action=str(item.get("action", "masquerade")),
                 disabled=_parse_bool(item.get("disabled"), default=False),
-                comment=item.get("comment"),
-                in_interface=item.get("in-interface"),
-                out_interface=item.get("out-interface"),
-                src_address=item.get("src-address"),
-                dst_address=item.get("dst-address"),
-                to_addresses=item.get("to-addresses"),
+                comment=_parse_str(item.get("comment")),
+                in_interface=_parse_str(item.get("in-interface")),
+                out_interface=_parse_str(item.get("out-interface")),
+                src_address=_parse_str(item.get("src-address")),
+                dst_address=_parse_str(item.get("dst-address")),
+                to_addresses=_parse_str(item.get("to-addresses")),
             )
         )
 
@@ -459,7 +471,7 @@ async def discover(client: RouterClient) -> RouterContext:
                 id=str(item.get(".id", "")),
                 name=str(item.get("name", "")),
                 target=str(item.get("target", "")),
-                max_limit=item.get("max-limit"),
+                max_limit=_parse_str(item.get("max-limit")),
                 disabled=_parse_bool(item.get("disabled"), default=False),
             )
         )
@@ -471,8 +483,8 @@ async def discover(client: RouterClient) -> RouterContext:
                 id=str(item.get(".id", "")),
                 name=str(item.get("name", "")),
                 interface=str(item.get("interface", "")),
-                address_pool=item.get("address-pool"),
-                lease_time=item.get("lease-time"),
+                address_pool=_parse_str(item.get("address-pool")),
+                lease_time=_parse_str(item.get("lease-time")),
                 disabled=_parse_bool(item.get("disabled"), default=False),
             )
         )
@@ -483,10 +495,10 @@ async def discover(client: RouterClient) -> RouterContext:
             DhcpLeaseInfo(
                 id=str(item.get(".id", "")),
                 address=str(item.get("address", "")),
-                mac_address=item.get("mac-address"),
+                mac_address=_parse_str(item.get("mac-address")),
                 server=str(item.get("server", "")),
                 status=str(item.get("status", "bound")),
-                host_name=item.get("host-name"),
+                host_name=_parse_str(item.get("host-name")),
             )
         )
 
@@ -497,8 +509,8 @@ async def discover(client: RouterClient) -> RouterContext:
                 id=str(item.get(".id", "")),
                 name=str(item.get("name", "")),
                 interface=str(item.get("interface", "")),
-                profile=item.get("profile"),
-                address_pool=item.get("address-pool"),
+                profile=_parse_str(item.get("profile")),
+                address_pool=_parse_str(item.get("address-pool")),
                 disabled=_parse_bool(item.get("disabled"), default=False),
             )
         )
@@ -509,7 +521,7 @@ async def discover(client: RouterClient) -> RouterContext:
             HotspotUserInfo(
                 id=str(item.get(".id", "")),
                 name=str(item.get("name", "")),
-                profile=item.get("profile"),
+                profile=_parse_str(item.get("profile")),
                 disabled=_parse_bool(item.get("disabled"), default=False),
             )
         )
